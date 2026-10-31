@@ -1,0 +1,4 @@
+<resources>
+    <!-- Window theme only; the app's look is defined in ui/theme/Theme.kt. -->
+    <style name="Theme.GeoTrailMaps" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

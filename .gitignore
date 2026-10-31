@@ -1,0 +1,14 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+captures/
+
+# Signing material lives in ~/sandbox/.signing/geo-trail-maps; a local copy in the
+# project root is allowed for convenience but must never be committed.
+*.keystore
+*.jks
+credentials.env
+keystore.properties

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon while a track records: a route line between two points. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6,3a3,3 0,1 1,0 6a3,3 0,1 1,0 -6zM18,15a3,3 0,1 1,0 6a3,3 0,1 1,0 -6zM7,9.5h1.5v4c0,1.9 1.6,3.5 3.5,3.5h3.5v1.5h-3.5c-2.8,0 -5,-2.2 -5,-5z" />
+</vector>

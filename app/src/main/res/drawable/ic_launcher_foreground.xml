@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Folded map with a location pin. 108dp canvas, art kept inside the 66dp safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#E0F2F1"
+        android:pathData="M30,38 L44,33 L64,39 L78,34 L78,72 L64,77 L44,71 L30,76 Z" />
+    <path
+        android:fillColor="#B2DFDB"
+        android:pathData="M44,33 L64,39 L64,77 L44,71 Z" />
+    <path
+        android:fillColor="#E53935"
+        android:pathData="M54,30 C47.4,30 42,35.4 42,42 C42,51 54,64 54,64 C54,64 66,51 66,42 C66,35.4 60.6,30 54,30 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,37.5 A4.5,4.5 0 1,1 53.99,37.5 Z" />
+</vector>
