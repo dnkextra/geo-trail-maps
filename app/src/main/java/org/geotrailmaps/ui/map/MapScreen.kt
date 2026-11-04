@@ -64,14 +64,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddLocationAlt
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Badge
@@ -85,6 +87,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -117,10 +120,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.LinkAnnotation
@@ -278,7 +286,8 @@ private fun MapContent(
     var showStopTrack by remember { mutableStateOf(false) }
     /** A save waiting for the last batched fixes: Stop/Save mustn't run twice. */
     var savingTrack by remember { mutableStateOf(false) }
-    var measuring by remember { mutableStateOf(false) }
+    /** Navigate: tapping points to measure the way between them, along trails or straight. */
+    var navigating by remember { mutableStateOf(false) }
     /** Bars hidden so the map fills the screen; a tap on empty map toggles it. */
     var chromeHidden by remember { mutableStateOf(false) }
     // Last measured bar heights, restored explicitly when the bars come back.
@@ -286,12 +295,19 @@ private fun MapContent(
     LaunchedEffect(chromeHidden) {
         if (chromeHidden) viewport.setInsets(0f, 0f) else viewport.setInsets(barHeights[0], barHeights[1])
     }
-    /** Choosing where to put a new placemark with the centre crosshair. */
-    var placing by remember { mutableStateOf(false) }
-    var measureMode by remember { mutableStateOf(MeasureMode.DISTANCE) }
-    val measurePoints = remember { mutableStateListOf<LatLon>() }
-    val alongTrails = measuring && measureMode == MeasureMode.TRAILS
-    /** Adding trails (over Measure, if it was open: it's back after). */
+    /** The + tool: a point aimed with the centre crosshair, or a line or area tapped out. */
+    var adding by remember { mutableStateOf<AddMode?>(null) }
+    val placing = adding == AddMode.POINT
+    /** Taps on the map add points: navigating, or drawing a line or area. */
+    val tapping = navigating || adding == AddMode.LINE || adding == AddMode.AREA
+    var navMode by remember { mutableStateOf(NavMode.TRAILS) }
+    val tapPoints = remember { mutableStateListOf<LatLon>() }
+    val alongTrails = navigating && navMode == NavMode.TRAILS
+    /** A spot long-pressed on the map, marked with a crosshair; its actions replace the toolbar. */
+    var pressed by remember { mutableStateOf<LatLon?>(null) }
+    /** Finding a route before there's a GPS fix: it starts from you once there is one. */
+    var routeFromMe by remember { mutableStateOf(false) }
+    /** Adding trails (over Navigate, if it was open: it's back after). */
     var addingTrails by remember { mutableStateOf(false) }
     var trailMode by remember { mutableStateOf(TrailMode.DRAW) }
     // Nothing drawn or picked is saved until it's confirmed.
@@ -317,12 +333,12 @@ private fun MapContent(
         if (addingTrails) value = session.trailNetwork(pendingTrails.map { t -> t.map { it.at } })
     }
     /** The route along trails, with the points it goes through. */
-    val measureRoute by produceState<Pair<List<LatLon>, TrailRoute>?>(null, alongTrails, trailNetwork, measurePoints.toList()) {
+    val measureRoute by produceState<Pair<List<LatLon>, TrailRoute>?>(null, alongTrails, trailNetwork, tapPoints.toList()) {
         val net = trailNetwork
-        val points = measurePoints.toList()
+        val points = tapPoints.toList()
         value = if (alongTrails && net != null) points to withContext(Dispatchers.Default) { net.route(points) } else null
     }
-    val currentRoute = measureRoute?.takeIf { it.first == measurePoints.toList() }?.second
+    val currentRoute = measureRoute?.takeIf { it.first == tapPoints.toList() }?.second
     /** Highlighted on the map. */
     var selectedId by remember { mutableStateOf<String?>(null) }
     /** Open in the editor sheet. */
@@ -383,7 +399,7 @@ private fun MapContent(
         if (following && onMap) viewport.centerOn(geo.toPage(myLatLon))
     }
     LaunchedEffect(compass, heading, myLatLon) {
-        if (compass && !placing && !measuring && !addingTrails && heading != null && proj != null && myLatLon != null) {
+        if (compass && adding == null && !navigating && !addingTrails && heading != null && proj != null && myLatLon != null) {
             // Turn the map so the heading points up, whatever the map's own north.
             val a = proj.toScreen(myLatLon)
             val b = proj.toScreen(Geodesy.destination(myLatLon, heading!!.toDouble(), 50.0))
@@ -506,6 +522,69 @@ private fun MapContent(
         editingId = f.id
     }
 
+    fun closeTools() {
+        adding = null
+        navigating = false
+        tapPoints.clear()
+        routeFromMe = false
+        pressed = null
+    }
+
+    /** Opening + or Navigate: the map stops moving by itself, and nothing else stays open. */
+    fun startTool() {
+        closeTools()
+        selectedId = null
+        following = false
+        if (compass) exitCompass()
+    }
+
+    /** Saves the tapped points as a line or area and opens it in the editor. */
+    fun saveShape(area: Boolean, points: List<LatLon>) {
+        val type = if (area) FeatureType.AREA else FeatureType.LINE
+        val n = session.features.count { it.type == type } + 1
+        val f = Feature(type = type, name = if (area) "Area $n" else "Line $n", points = points, color = MapStyle.lineColor.toArgb())
+        session.upsert(f)
+        closeTools()
+        selectedId = f.id
+        editingId = f.id
+    }
+
+    /** Shows two places together, such as where you are and where you're going. */
+    fun showBoth(a: LatLon, b: LatLon) {
+        val g = geo ?: return
+        val pa = g.toPage(a)
+        val pb = g.toPage(b)
+        following = false
+        if (compass) exitCompass()
+        viewport.showRect(minOf(pa.x, pb.x).toFloat(), minOf(pa.y, pb.y).toFloat(), maxOf(pa.x, pb.x).toFloat(), maxOf(pa.y, pb.y).toFloat())
+    }
+
+    /** Navigate along trails from where you are to [to]. */
+    fun findRoute(to: LatLon) {
+        startTool()
+        navMode = NavMode.TRAILS
+        navigating = true
+        val me = myLatLon
+        if (me == null || !onMap) {
+            // Off the map, a route from you would mostly be a straight line to its edge.
+            if (!hasLocationPermission) onRequestLocationPermission()
+            else if (me != null) showMessage("You are ${Formats.distance(geo!!.distanceFromMap(me), units)} from this map. Tap where to start.")
+            tapPoints += to
+            routeFromMe = true
+        } else {
+            tapPoints += listOf(me, to)
+            showBoth(me, to)
+        }
+    }
+    // The first fix on this map after "Find route" becomes the route's start (after adding trails, if that's open).
+    LaunchedEffect(routeFromMe, onMap, addingTrails) {
+        val me = myLatLon ?: return@LaunchedEffect
+        if (!routeFromMe || !navigating || !onMap || addingTrails) return@LaunchedEffect
+        routeFromMe = false
+        tapPoints.add(0, me)
+        tapPoints.getOrNull(1)?.let { showBoth(me, it) }
+    }
+
     /** Zooms to fit [list] (or centres on a single placemark). */
     fun showFeatures(list: List<Feature>) {
         val g = session.geometry ?: return
@@ -526,7 +605,8 @@ private fun MapContent(
 
     fun startAddingTrails() {
         selectedId = null
-        placing = false
+        adding = null
+        pressed = null
         searching = false
         following = false
         if (compass) exitCompass()
@@ -587,9 +667,9 @@ private fun MapContent(
                 val what = "$n ${if (n == 1) "feature" else "features"}"
                 showMessage(
                     when (outside) {
-                        0 -> "Imported $what into \"${imported.layers.first().name}\", hidden. Tick it in Features to show it."
+                        0 -> "Imported $what into \"${imported.layers.first().name}\", hidden. Tick it in Layers to show it."
                         n -> "Imported $what, but none of them are on this map"
-                        else -> "Imported $what ($outside outside this map), hidden. Tick it in Features to show it."
+                        else -> "Imported $what ($outside outside this map), hidden. Tick it in Layers to show it."
                     },
                     SnackbarDuration.Long,
                 )
@@ -601,7 +681,14 @@ private fun MapContent(
         }
     }
 
+    val savePdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri != null) scope.launch {
+            showMessage(if (session.library.exportPdf(entry.id, uri)) "Saved a copy of the map's PDF." else "Couldn't save the PDF.")
+        }
+    }
+
     val keyboard = LocalSoftwareKeyboardController.current
+    val haptics = LocalHapticFeedback.current
     // After search closes, the panel keeps riding the keyboard until it has slid away,
     // so both go down together instead of the panel snapping first.
     var holdForKeyboard by remember { mutableStateOf(false) }
@@ -632,8 +719,8 @@ private fun MapContent(
             chromeHidden -> chromeHidden = false
             searching -> closeSearch()
             addingTrails -> if (pendingCount > 0) confirmingClose = true else addingTrails = false
-            measuring -> { measuring = false; measurePoints.clear() }
-            placing -> placing = false
+            pressed != null -> pressed = null
+            navigating || adding != null -> closeTools()
             else -> onBack()
         }
     }
@@ -653,8 +740,8 @@ private fun MapContent(
             geo == null -> showMessage("This PDF has no location information.")
             myLatLon == null -> showMessage("Waiting for GPS…")
             !onMap -> showMessage("You are ${Formats.distance(geo.distanceFromMap(myLatLon), units)} from this map.")
-            // Following would pull the crosshair or measurement away on every fix.
-            placing || measuring || addingTrails -> viewport.centerOn(geo.toPage(myLatLon))
+            // Following would pull the crosshair or the points being tapped away on every fix.
+            adding != null || navigating || addingTrails -> viewport.centerOn(geo.toPage(myLatLon))
             // Taps cycle: follow (north up) -> compass (heading up) -> follow (north up).
             !following -> {
                 following = true
@@ -673,6 +760,21 @@ private fun MapContent(
         }
     }
 
+    // Only with no tool open: the tools use taps for themselves.
+    val canPress = proj != null && adding == null && !navigating && !addingTrails && !searching
+    fun press(p: LatLon) {
+        pressed = p
+        selectedId = null
+        // Following or compass mode would pull the spot away on the next fix or turn.
+        following = false
+        if (compass) exitCompass()
+        // The controls come back for its actions; keep the spot from ending up under them.
+        if (chromeHidden) {
+            chromeHidden = false
+            viewport.centerOn(geo!!.toPage(p))
+        }
+    }
+
     val recordingFeature = remember(recording.points) {
         Feature(id = RECORDING_ID, type = FeatureType.LINE, name = "", points = recording.points, color = MapStyle.recordingTrack.toArgb())
     }
@@ -687,8 +789,11 @@ private fun MapContent(
             },
             modifier = Modifier
                 .fillMaxSize()
-                .semantics { onClick(label = if (chromeHidden) "Show controls" else "Hide controls") { chromeHidden = !chromeHidden; true } },
-            doubleTapZoom = !measuring && !addingTrails,
+                .semantics {
+                    onClick(label = if (chromeHidden) "Show controls" else "Hide controls") { chromeHidden = !chromeHidden; true }
+                    if (canPress) onLongClick(label = "Mark the centre of the map") { press(geo!!.toLatLon(viewport.center)); true }
+                },
+            doubleTapZoom = !tapping && !addingTrails,
             onUserMove = {
                 following = false
                 if (compass) {
@@ -699,6 +804,8 @@ private fun MapContent(
             onTap = { pos ->
                 if (searching) return@MapView closeSearch()
                 if (placing) return@MapView
+                // A tap away from a long-pressed spot just lets it go.
+                if (pressed != null) return@MapView run { pressed = null }
                 if (proj == null) {
                     chromeHidden = !chromeHidden // no features without georeferencing
                 } else if (addingTrails && trailMode == TrailMode.DRAW) {
@@ -716,12 +823,19 @@ private fun MapContent(
                         pickHistory += add to listOf(i)
                         lastPicked = i
                     }
-                } else if (measuring) {
+                } else if (tapping) {
                     val p = proj.toLatLon(pos)
                     // Along trails, a tap close to a trail goes on it.
                     val snap = if (alongTrails) trailNetwork?.snap(p) else null
                     val near = snap != null && (proj.toScreen(snap.point) - pos).getDistance() <= with(density) { 24.dp.toPx() }
-                    measurePoints += if (near) snap!!.point else p
+                    val q = if (near) snap!!.point else p
+                    // Still waiting for a fix after "Find route": a tap is where to start instead.
+                    if (routeFromMe) {
+                        routeFromMe = false
+                        tapPoints.add(0, q)
+                    } else {
+                        tapPoints += q
+                    }
                 } else {
                     val pinHeight = with(density) { MapStyle.pinHeight.toPx() }
                     val hit = hitTest(session.shownFeatures, pos, session.geometry!!, viewport, density.density, pinHeight)
@@ -744,6 +858,10 @@ private fun MapContent(
                     }
                 }
             },
+            onLongPress = if (canPress) { pos ->
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                press(proj!!.toLatLon(pos))
+            } else null,
             underlay = {
                 if (source != null && proj != null) drawBasemap(basemap, source, visibleTiles(proj, viewport, density.density, source.maxZoom), proj, tilePaint)
             },
@@ -762,11 +880,12 @@ private fun MapContent(
                 }
                 if (recording.points.size >= 2) drawFeatures(listOf(recordingFeature), null, session.geometry, viewport)
                 // The last route until the new one is found (a few ms), rather than flashing straight lines.
-                if (measuring && !addingTrails) drawMeasurement(measurePoints, measureMode == MeasureMode.AREA, proj, if (alongTrails) measureRoute?.second else null)
+                if (tapping && !addingTrails) drawMeasurement(tapPoints, adding == AddMode.AREA, proj, if (alongTrails) measureRoute?.second else null)
                 searchPoint?.let { drawSearchMarker(it, proj) }
                 navTarget?.let { drawNavigation(myLatLon, it.position, proj) }
                 if (myLatLon != null) drawLocation(myLatLon, location?.accuracy, heading, proj, stale)
                 if (placing) drawCrosshair(viewport.toScreen(viewport.center))
+                pressed?.let { drawCrosshair(proj.toScreen(it)) }
             }
         }
 
@@ -825,11 +944,9 @@ private fun MapContent(
                 }
             },
             actions = {
-                // Hidden while placing or measuring, so opening search can't discard that work.
-                if (geo != null && !placing && !measuring && !addingTrails) IconButton(onClick = {
-                    placing = false
-                    measuring = false
-                    measurePoints.clear()
+                // Hidden while adding or navigating, so opening search can't discard that work.
+                if (geo != null && adding == null && !navigating && !addingTrails) IconButton(onClick = {
+                    closeTools()
                     searchQuery = ""
                     searching = true
                 }) { Icon(Icons.Filled.Search, "Search or go to coordinates") }
@@ -838,6 +955,7 @@ private fun MapContent(
                     canExport = session.features.isNotEmpty(),
                     canImport = geo != null,
                     onImport = { importLauncher.launch(IMPORT_TYPES) },
+                    onSavePdf = { savePdfLauncher.launch(entry.name.replace('/', '_') + ".pdf") },
                     onZoomToMap = { following = false; viewport.fit() },
                     onExport = { kml -> shareFeatures(context, entry.name, session.features, session.layers, kml) },
                 )
@@ -990,15 +1108,23 @@ private fun MapContent(
                             },
                             onClose = ::closeSearch,
                         )
-                    } else if (placing && geo != null) {
-                        PlacePanel(
+                    } else if (adding != null && geo != null) {
+                        val mode = adding!!
+                        AddPanel(
+                            mode = mode,
                             target = geo.toLatLon(viewport.center),
+                            points = tapPoints,
                             format = format,
-                            onCancel = { placing = false },
-                            onAdd = {
-                                placing = false
-                                addPlacemark(geo.toLatLon(viewport.center))
+                            units = units,
+                            onModeChange = { adding = it },
+                            onUndo = { tapPoints.removeLastOrNull() },
+                            onPlace = {
+                                val at = geo.toLatLon(viewport.center)
+                                closeTools()
+                                addPlacemark(at)
                             },
+                            onSave = { saveShape(mode == AddMode.AREA, tapPoints.toList()) },
+                            onClose = ::closeTools,
                         )
                     } else if (addingTrails) {
                         TrailPanel(
@@ -1037,61 +1163,63 @@ private fun MapContent(
                             onConfirm = ::confirmTrails,
                             onClose = { if (pendingCount > 0) confirmingClose = true else addingTrails = false },
                         )
-                    } else if (measuring) {
-                        MeasurePanel(
-                            points = measurePoints,
-                            mode = measureMode,
+                    } else if (navigating) {
+                        NavigatePanel(
+                            points = tapPoints,
+                            mode = navMode,
                             trails = trailNetwork.takeIf { alongTrails },
                             route = currentRoute,
                             hasLineLayers = alongTrails && session.features.any { it.type == FeatureType.LINE && it.layerId != null },
+                            waitingForLocation = routeFromMe,
                             units = units,
-                            onModeChange = { measureMode = it },
-                            onOpenFeatures = { showList = true },
+                            onModeChange = { navMode = it },
+                            onOpenLayers = { showList = true },
                             onAddTrails = ::startAddingTrails,
                             onImport = { importLauncher.launch(IMPORT_TYPES) },
-                            onUndo = { if (measurePoints.isNotEmpty()) measurePoints.removeAt(measurePoints.lastIndex) },
-                            onSave = {
-                                val area = measureMode == MeasureMode.AREA
-                                val type = if (area) FeatureType.AREA else FeatureType.LINE
-                                val n = session.features.count { it.type == type } + 1
-                                val f = Feature(
-                                    type = type,
-                                    name = if (area) "Area $n" else "Line $n",
-                                    points = if (alongTrails) currentRoute!!.points else measurePoints.toList(),
-                                    color = MapStyle.lineColor.toArgb(),
-                                )
-                                session.upsert(f)
-                                measuring = false
-                                measurePoints.clear()
-                                selectedId = f.id
-                                editingId = f.id
+                            onUndo = {
+                                routeFromMe = false
+                                tapPoints.removeLastOrNull()
                             },
-                            onClose = { measuring = false; measurePoints.clear() },
+                            onSave = { saveShape(false, if (alongTrails) currentRoute!!.points else tapPoints.toList()) },
+                            onClose = ::closeTools,
+                        )
+                    } else if (pressed != null && geo != null) {
+                        val at = pressed!!
+                        PressedPanel(
+                            at = at,
+                            me = myLatLon,
+                            format = format,
+                            units = units,
+                            onCopy = {
+                                copyCoordinates(context, at)
+                                pressed = null
+                            },
+                            onRoute = { findRoute(at) },
+                            onAdd = {
+                                pressed = null
+                                addPlacemark(at)
+                            },
+                            onClose = { pressed = null },
                         )
                     } else {
                         Column {
                         StatusLine(geo, location, myLatLon, onMap, stale, fixAgeSeconds, hasLocationPermission, format, units, onRequestLocationPermission)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            ToolbarButton(Icons.Filled.AddLocationAlt, "Placemark", enabled = geo != null) {
+                            ToolbarButton(Icons.Filled.Add, "Add", enabled = geo != null) {
                                 // Aim with the crosshair, starting at your position when you're on the map.
-                                selectedId = null
-                                following = false
-                                if (compass) exitCompass()
+                                startTool()
                                 if (onMap) viewport.centerOn(geo.toPage(myLatLon))
-                                placing = true
+                                adding = AddMode.POINT
                             }
-                            ToolbarButton(Icons.Filled.Straighten, "Measure", enabled = geo != null) {
-                                selectedId = null
-                                placing = false
-                                following = false
-                                if (compass) exitCompass()
-                                measuring = true
+                            ToolbarButton(Icons.Filled.Route, "Navigate", enabled = geo != null) {
+                                startTool()
+                                navigating = true
                             }
                             val idle = recording.status == TrackRecorder.Status.IDLE
                             ToolbarButton(if (idle) Icons.Filled.FiberManualRecord else Icons.Filled.Stop, if (idle) "Track" else "Stop track", enabled = geo != null) {
                                 if (idle) startRecording() else if (!savingTrack) showStopTrack = true
                             }
-                            ToolbarButton(Icons.AutoMirrored.Filled.List, "Features", badge = session.shownFeatures.size) { showList = true }
+                            ToolbarButton(Icons.Filled.Layers, "Layers", badge = session.shownFeatures.size) { showList = true }
                         }
                         }
                     }
@@ -1117,16 +1245,7 @@ private fun MapContent(
             onTrail = if (f.type == FeatureType.LINE) ({ on -> session.setFeatureTrail(f.id, on) }) else null,
             onNavigate = {
                 navTarget = NavTarget(f.name, f.points.first())
-                // Show where you are and where you're going together.
-                val g = session.geometry
-                val me = myLatLon
-                if (g != null && me != null && geo != null) {
-                    val a = geo.toPage(me)
-                    val b = geo.toPage(f.points.first())
-                    following = false
-                    if (compass) exitCompass()
-                    viewport.showRect(minOf(a.x, b.x).toFloat(), minOf(a.y, b.y).toFloat(), maxOf(a.x, b.x).toFloat(), maxOf(a.y, b.y).toFloat())
-                }
+                myLatLon?.let { showBoth(it, f.points.first()) }
             },
             onSave = session::upsert,
             onDelete = {
@@ -1264,7 +1383,14 @@ private fun MapContent(
 }
 
 @Composable
-private fun MapMenu(canExport: Boolean, canImport: Boolean, onImport: () -> Unit, onZoomToMap: () -> Unit, onExport: (kml: Boolean) -> Unit) {
+private fun MapMenu(
+    canExport: Boolean,
+    canImport: Boolean,
+    onImport: () -> Unit,
+    onSavePdf: () -> Unit,
+    onZoomToMap: () -> Unit,
+    onExport: (kml: Boolean) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, "More") }
@@ -1273,6 +1399,7 @@ private fun MapMenu(canExport: Boolean, canImport: Boolean, onImport: () -> Unit
             DropdownMenuItem(text = { Text("Import GPX / KML…") }, enabled = canImport, onClick = { open = false; onImport() })
             DropdownMenuItem(text = { Text("Export features (KML)") }, enabled = canExport, onClick = { open = false; onExport(true) })
             DropdownMenuItem(text = { Text("Export features (GPX)") }, enabled = canExport, onClick = { open = false; onExport(false) })
+            DropdownMenuItem(text = { Text("Save PDF copy…") }, onClick = { open = false; onSavePdf() })
         }
     }
 }
@@ -1349,25 +1476,130 @@ private fun BasemapAttribution(source: BasemapSource, modifier: Modifier = Modif
     )
 }
 
+private enum class AddMode(val label: String) { POINT("Point"), LINE("Line"), AREA("Area") }
+
+/** The + tool: a point aimed with the crosshair, or a line or area tapped out on the map. */
 @Composable
-private fun PlacePanel(
+private fun AddPanel(
+    mode: AddMode,
+    /** Under the crosshair, for a point. */
     target: LatLon,
+    /** Tapped so far, for a line or area. */
+    points: List<LatLon>,
     format: CoordinateFormat,
-    onCancel: () -> Unit,
-    onAdd: () -> Unit,
+    units: Units,
+    onModeChange: (AddMode) -> Unit,
+    onUndo: () -> Unit,
+    onPlace: () -> Unit,
+    onSave: () -> Unit,
+    onClose: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.SpaceBetween) {
-        Column {
-            Text("Move the map to aim the crosshair", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(Formats.coordinate(target, format), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ModeChips(AddMode.entries, mode, { it.label }, onModeChange, Modifier.weight(1f))
+            if (mode != AddMode.POINT) IconButton(onClick = onUndo, enabled = points.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Undo, "Remove last point") }
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Cancel adding") }
         }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = onCancel) { Text("Cancel") }
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = onAdd) { Text("Add here") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (mode == AddMode.POINT) {
+                Column(Modifier.weight(1f)) {
+                    Text("Move the map to aim the crosshair", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    // Two lines if need be: DMS and UTM are wide beside the button.
+                    Text(Formats.coordinate(target, format), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = onPlace) { Text("Place marker") }
+            } else {
+                val area = mode == AddMode.AREA
+                val (result, isHint) = when {
+                    points.size < 2 -> "Tap the map to add points" to true
+                    area && points.size == 2 -> "Add one more point" to true
+                    area -> "${Formats.area(Geodesy.area(points), units)} · perimeter ${Formats.distance(Geodesy.pathLength(points + points.first()), units)}" to false
+                    else -> Formats.distance(Geodesy.pathLength(points), units) to false
+                }
+                ResultText(result, isHint, Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = onSave, enabled = !isHint) { Text("Save") }
+            }
         }
     }
+}
+
+/** What can be done at a long-pressed spot. */
+@Composable
+private fun PressedPanel(
+    at: LatLon,
+    me: LatLon?,
+    format: CoordinateFormat,
+    units: Units,
+    onCopy: () -> Unit,
+    onRoute: () -> Unit,
+    onAdd: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.SpaceBetween) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    Formats.coordinate(at, format),
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    // Announced, since it replaces the toolbar without anything being tapped there.
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                if (me != null) {
+                    val dir = Geodesy.compassPoint(Geodesy.bearing(me, at))
+                    Text(
+                        "${Formats.distance(Geodesy.distance(me, at), units)} $dir of you",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close") }
+        }
+        // Scrolls rather than squeezing the buttons at large font sizes.
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            val compact = PaddingValues(horizontal = 12.dp)
+            OutlinedButton(onClick = onCopy, contentPadding = compact) {
+                Icon(Icons.Filled.ContentCopy, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Copy")
+            }
+            OutlinedButton(onClick = onRoute, contentPadding = compact) {
+                Icon(Icons.Filled.Route, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Find route")
+            }
+            Button(onClick = onAdd, contentPadding = compact) {
+                Icon(Icons.Filled.AddLocationAlt, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Add point")
+            }
+        }
+    }
+}
+
+/** One choice of several, as chips that scroll rather than squeeze at large font sizes. */
+@Composable
+private fun <T> ModeChips(modes: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (m in modes) FilterChip(selected = selected == m, onClick = { onSelect(m) }, label = { Text(label(m)) })
+    }
+}
+
+/** A measurement, or a hint (smaller) while there isn't one yet. */
+@Composable
+private fun ResultText(text: String, isHint: Boolean, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        style = if (isHint) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier,
+    )
 }
 
 private enum class TrailMode(val label: String) { DRAW("Draw"), PICK("Pick from map") }
@@ -1456,51 +1688,49 @@ private fun TrailPanel(
 
 private const val MANY_LIKE = 300
 
-private enum class MeasureMode(val label: String) { DISTANCE("Distance"), TRAILS("Trails"), AREA("Area") }
+private enum class NavMode(val label: String) { TRAILS("Trails"), DISTANCE("Distance") }
 
+/** Navigate: the way between tapped points, along trails or straight, which can be saved as a line. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun MeasurePanel(
+private fun NavigatePanel(
     points: List<LatLon>,
-    mode: MeasureMode,
+    mode: NavMode,
     /** Along trails: the network, null while it's built. */
     trails: TrailNetwork?,
     /** Along trails: the route through [points], null while it's found. */
     route: TrailRoute?,
     /** Whether any layer has lines that could be used as trails. */
     hasLineLayers: Boolean,
+    /** "Find route" is waiting for a GPS fix to start from. */
+    waitingForLocation: Boolean,
     units: Units,
-    onModeChange: (MeasureMode) -> Unit,
-    onOpenFeatures: () -> Unit,
+    onModeChange: (NavMode) -> Unit,
+    onOpenLayers: () -> Unit,
     onAddTrails: () -> Unit,
     onImport: () -> Unit,
     onUndo: () -> Unit,
     onSave: () -> Unit,
     onClose: () -> Unit,
 ) {
-    val area = mode == MeasureMode.AREA
-    val length = Geodesy.pathLength(if (area && points.size > 2) points + points.first() else points)
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.SpaceBetween) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // Scrolls rather than squeezing the buttons at large font sizes.
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (m in MeasureMode.entries) FilterChip(selected = mode == m, onClick = { onModeChange(m) }, label = { Text(m.label) })
-            }
+            ModeChips(NavMode.entries, mode, { it.label }, onModeChange, Modifier.weight(1f))
             IconButton(onClick = onUndo, enabled = points.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Undo, "Remove last point") }
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Cancel measuring") }
+            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close navigate") }
         }
-        if (mode == MeasureMode.TRAILS && trails?.isEmpty == true) {
+        if (mode == NavMode.TRAILS && trails?.isEmpty == true) {
             // Nothing to save: the ways to get trails instead (under the text if they don't fit).
             FlowRow(horizontalArrangement = Arrangement.End, itemVerticalAlignment = Alignment.CenterVertically) {
                 val link = LinkAnnotation.Clickable(
-                    "features",
+                    "layers",
                     TextLinkStyles(SpanStyle(color = MaterialTheme.colorScheme.primary, textDecoration = TextDecoration.Underline)),
-                ) { onOpenFeatures() }
+                ) { onOpenLayers() }
                 Text(
                     buildAnnotatedString {
                         if (hasLineLayers) {
                             append("Turn on trail lines in ")
-                            withLink(link) { append("Features") }
+                            withLink(link) { append("Layers") }
                         } else {
                             append("No usable trail data on this map.")
                         }
@@ -1516,28 +1746,21 @@ private fun MeasurePanel(
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             val (result, isHint) = when {
-                mode == MeasureMode.TRAILS && trails == null -> "Finding the trails…" to true
+                mode == NavMode.TRAILS && trails == null -> "Finding the trails…" to true
+                waitingForLocation && points.size < 2 -> "Waiting for GPS, or tap where to start" to true
                 points.size < 2 -> "Tap the map to add points" to true
-                area && points.size == 2 -> "Add one more point" to true
-                area -> "${Formats.area(Geodesy.area(points), units)} · perimeter ${Formats.distance(length, units)}" to false
-                mode == MeasureMode.TRAILS && route == null -> "Finding the route…" to true
-                mode == MeasureMode.TRAILS -> buildString {
+                mode == NavMode.TRAILS && route == null -> "Finding the route…" to true
+                mode == NavMode.TRAILS -> buildString {
                     // The whole walk; how much of it isn't on a trail, if any.
                     append(Formats.distance(route!!.length, units))
                     if (route.offTrail >= 1) append(" · ").append(Formats.distance(route.offTrail, units)).append(" off trail")
                     else append(" along trails")
                 } to false
-                else -> Formats.distance(length, units) to false
+                else -> Formats.distance(Geodesy.pathLength(points), units) to false
             }
-            Text(
-                result,
-                style = if (isHint) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            ResultText(result, isHint, Modifier.weight(1f))
             Spacer(Modifier.width(8.dp))
-            Button(onClick = onSave, enabled = !isHint) { Text("Save") }
+            Button(onClick = onSave, enabled = !isHint) { Text("Save line") }
         }
     }
 }
@@ -1652,5 +1875,5 @@ private const val STALE_FIX_SECONDS = 30
 
 private fun normalizeDegrees(d: Float): Float = ((d % 360f) + 540f) % 360f - 180f
 
-/** Height of the bottom panel's content in every mode (toolbar, placing, measuring, search). */
+/** Height of the bottom panel's content in every mode (toolbar, adding, navigating, search). */
 private val PANEL_HEIGHT = 112.dp

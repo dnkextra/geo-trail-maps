@@ -3,6 +3,7 @@ package org.geotrailmaps.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -137,6 +138,19 @@ class MapLibrary(private val context: Context) {
             dir.deleteRecursively()
             throw e
         }
+    }
+
+    /** Writes the map's PDF, exactly as it was imported, to [uri]; false if that failed. */
+    suspend fun exportPdf(id: String, uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        val ok = try {
+            context.contentResolver.openOutputStream(uri, "wt")?.use { o -> pdfFile(id).inputStream().use { it.copyTo(o) } } != null
+        } catch (e: Exception) {
+            // Providers fail in many ways (IO, permissions, bad state); all mean it wasn't saved.
+            false
+        }
+        // The save dialog already made the file: don't leave it empty or cut short.
+        if (!ok) runCatching { DocumentsContract.deleteDocument(context.contentResolver, uri) }
+        ok
     }
 
     fun setFolder(id: String, folder: String?) {

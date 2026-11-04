@@ -59,7 +59,7 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
             Text(
                 "Opens geospatial PDF maps (GeoPDFs), the format Avenza Maps imports and exports. Files in Avenza's own " +
                     ".avenzamap format are encrypted and can only be opened in Avenza Maps.\n\n" +
-                    "The background map (chosen under Features on any map) uses OpenStreetMap tiles, ${BasemapSource.OSM.credit}, " +
+                    "The background map (chosen under Layers on any map) uses OpenStreetMap tiles, ${BasemapSource.OSM.credit}, " +
                     "or satellite imagery: ${BasemapSource.SATELLITE.credit}, licensed CC BY-NC-SA 4.0 for noncommercial use. " +
                     "Tiles are downloaded when online and cached; requests reveal the area you're viewing to the tile provider " +
                     "(openstreetmap.org or eox.at).",

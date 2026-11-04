@@ -2,6 +2,7 @@ package org.geotrailmaps.ui.map
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.selection.selectable
@@ -25,7 +26,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
@@ -41,6 +44,7 @@ import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.outlined.Pentagon
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
@@ -64,6 +68,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -84,6 +89,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.geotrailmaps.data.CoordinateFormat
@@ -112,6 +119,12 @@ fun Feature.summary(units: Units, format: CoordinateFormat): String = when (type
         (track?.durationMillis?.let { " · " + Formats.duration(it) } ?: "") +
         (track?.ascent?.takeIf { it >= 1 }?.let { " · ↑" + Formats.distance(it, units) } ?: "")
     FeatureType.AREA -> "Area ${Formats.area(area, units)} · Perimeter ${Formats.distance(length, units)}"
+}
+
+/** Always decimal "lat, lon" so it pastes into other map apps. Android shows its own "Copied" confirmation. */
+fun copyCoordinates(context: Context, p: LatLon) {
+    context.getSystemService(ClipboardManager::class.java)
+        .setPrimaryClip(ClipData.newPlainText("Coordinates", String.format(Locale.US, "%.6f, %.6f", p.lat, p.lon)))
 }
 
 /** Edit a feature's name, notes and colour. Changes are saved when the sheet closes. */
@@ -154,12 +167,7 @@ fun FeatureEditSheet(
                 Text(feature.summary(units, format), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                 if (feature.type == FeatureType.POINT) {
                     val context = LocalContext.current
-                    // Always decimal "lat, lon" so it pastes into other map apps. Android shows its own "Copied" confirmation.
-                    IconButton(onClick = {
-                        val p = feature.points.first()
-                        context.getSystemService(ClipboardManager::class.java)
-                            .setPrimaryClip(ClipData.newPlainText("Coordinates", String.format(Locale.US, "%.6f, %.6f", p.lat, p.lon)))
-                    }) { Icon(Icons.Filled.ContentCopy, "Copy coordinates") }
+                    IconButton(onClick = { copyCoordinates(context, feature.points.first()) }) { Icon(Icons.Filled.ContentCopy, "Copy coordinates") }
                 }
             }
             if (layerName != null) {
@@ -202,8 +210,8 @@ fun FeatureEditSheet(
                         Text(
                             when {
                                 trailByLayer -> "Its layer is used for trail distance."
-                                on -> "Counts when you measure along trails, even while it's hidden."
-                                else -> "Count it when you measure along trails."
+                                on -> "Counts when you navigate along trails, even while it's hidden."
+                                else -> "Count it when you navigate along trails."
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -264,7 +272,7 @@ class FeatureListActions(
 )
 
 /**
- * Layers, like QField's layer list: the background map, "My features" (drawn in the app)
+ * The Layers sheet, like QField's layer list: the background map, "My features" (drawn in the app)
  * and one collapsible group per imported file, each with its actions as icons.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -287,6 +295,7 @@ fun FeatureListSheet(
     var renaming by remember { mutableStateOf<FeatureLayer?>(null) }
     var choosingTrails by remember { mutableStateOf<FeatureLayer?>(null) }
     var deleting by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    var choosingBasemap by remember { mutableStateOf(false) }
     val mine = features.filter { it.layerId == null }.sortedByDescending { it.createdAt }
     val byLayer = features.filter { it.layerId != null }.groupBy { it.layerId }
     val uriHandler = LocalUriHandler.current
@@ -344,85 +353,51 @@ fun FeatureListSheet(
         )
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    // No dimming while the background map is being changed, so the see-through can be judged.
+    ModalBottomSheet(onDismissRequest = onDismiss, scrimColor = if (choosingBasemap) Color.Transparent else BottomSheetDefaults.ScrimColor) {
         Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Layers & features", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Text("Layers", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             // No icons: both fit beside the title on a narrow phone.
             TextButton(onClick = actions.onAddTrails) { Text("Add trails") }
             TextButton(onClick = actions.onImport) { Text("Import") }
         }
         LazyColumn(Modifier.padding(bottom = 16.dp)) {
+            // One line: the choice, credits and see-through are in a dialog, so they don't crowd the layers.
             item(key = "basemap") {
-                Column(Modifier.padding(start = 16.dp, end = 4.dp, bottom = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                val percent = (seeThrough * 100).roundToInt()
+                ListItem(
+                    headlineContent = { Text("Background map", style = MaterialTheme.typography.titleSmall) },
+                    supportingContent = {
                         Text(
-                            "Background map",
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.weight(1f).semantics { heading() },
+                            when {
+                                basemap == null -> "None"
+                                canSeeThrough && percent > 0 -> "${basemap.label} · $percent% through the map"
+                                else -> basemap.label
+                            },
                         )
-                        if (basemap != null) {
-                            IconButton(onClick = { uriHandler.openUri(basemap.creditUrl) }) {
-                                Icon(Icons.AutoMirrored.Filled.OpenInNew, "${basemap.label} credits and licence")
-                            }
-                        }
-                    }
-                    Column(Modifier.padding(end = 12.dp)) {
-                        val choices = listOf(null to "None", BasemapSource.OSM to "OSM", BasemapSource.SATELLITE to "Satellite")
-                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                            choices.forEachIndexed { i, (source, label) ->
-                                SegmentedButton(
-                                    selected = basemap == source,
-                                    onClick = { actions.onBasemap(source) },
-                                    shape = SegmentedButtonDefaults.itemShape(i, choices.size),
-                                    // No check mark: the fill shows the choice, and "Satellite" needs the room.
-                                    icon = {},
-                                    colors = SegmentedButtonDefaults.colors(
-                                        activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                        activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    ),
-                                ) { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                            }
-                        }
-                        if (basemap != null) {
-                            Text(
-                                basemap.credit,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                        }
-                        if (basemap != null && canSeeThrough) {
-                            // How much of the background shows through this PDF's paper colour.
-                            val percent = "${(seeThrough * 100).roundToInt()}%"
-                            Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text("Show background through map", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                                Text(percent, style = MaterialTheme.typography.bodyMedium)
-                            }
-                            Slider(
-                                value = seeThrough,
-                                onValueChange = actions.onSeeThrough,
-                                onValueChangeFinished = actions.onSeeThroughDone,
-                                // 5% steps, without the 19 tick dots they'd draw.
-                                steps = 19,
-                                colors = SliderDefaults.colors(activeTickColor = Color.Transparent, inactiveTickColor = Color.Transparent),
-                                modifier = Modifier.semantics {
-                                    contentDescription = "Show background through map"
-                                    stateDescription = percent
-                                },
-                            )
-                        }
-                    }
-                }
+                    },
+                    leadingContent = { Icon(Icons.Filled.Map, null, tint = MaterialTheme.colorScheme.primary) },
+                    trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                    colors = transparent,
+                    modifier = Modifier.clickable(onClickLabel = "Change", role = Role.Button) { choosingBasemap = true },
+                )
             }
             val mineOpen = expanded["mine"] != false
             item(key = "mine") {
                 ListItem(
                     headlineContent = { Text("My features", style = MaterialTheme.typography.titleSmall) },
                     supportingContent = {
-                        Text(if (mine.isEmpty()) "Add placemarks with the Placemark button, or save a measurement" else countText(mine.size))
+                        if (mine.isEmpty()) {
+                            Text("Add points, lines and areas with the + button")
+                        } else {
+                            // The open/closed arrow beside the count, as for the imported layers.
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(countText(mine.size))
+                                Icon(if (mineOpen) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null, Modifier.size(18.dp))
+                            }
+                        }
                     },
                     leadingContent = { Icon(Icons.Filled.Layers, null, tint = MaterialTheme.colorScheme.primary) },
-                    trailingContent = { if (mine.isNotEmpty()) Icon(if (mineOpen) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null) },
                     colors = transparent,
                     modifier = if (mine.isEmpty()) Modifier else Modifier
                         .clickable(onClickLabel = if (mineOpen) "Collapse" else "Expand") { expanded["mine"] = !mineOpen }
@@ -496,6 +471,68 @@ fun FeatureListSheet(
         }
     }
 
+    if (choosingBasemap) {
+        AlertDialog(
+            onDismissRequest = { choosingBasemap = false },
+            title = { Text("Background map") },
+            text = {
+                (LocalView.current.parent as? DialogWindowProvider)?.window?.let { w -> SideEffect { w.setDimAmount(0f) } }
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    val choices = listOf(null to "None", BasemapSource.OSM to "OSM", BasemapSource.SATELLITE to "Satellite")
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        choices.forEachIndexed { i, (source, label) ->
+                            SegmentedButton(
+                                selected = basemap == source,
+                                onClick = { actions.onBasemap(source) },
+                                shape = SegmentedButtonDefaults.itemShape(i, choices.size),
+                                // No check mark: the fill shows the choice, and "Satellite" needs the room.
+                                icon = {},
+                                colors = SegmentedButtonDefaults.colors(
+                                    activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                ),
+                            ) { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        }
+                    }
+                    if (basemap != null) {
+                        Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                basemap.credit,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(onClick = { uriHandler.openUri(basemap.creditUrl) }) {
+                                Icon(Icons.AutoMirrored.Filled.OpenInNew, "${basemap.label} credits and licence")
+                            }
+                        }
+                    }
+                    if (basemap != null && canSeeThrough) {
+                        // How much of the background shows through this PDF's paper colour.
+                        val percent = "${(seeThrough * 100).roundToInt()}%"
+                        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Show background through map", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            Text(percent, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Slider(
+                            value = seeThrough,
+                            onValueChange = actions.onSeeThrough,
+                            onValueChangeFinished = actions.onSeeThroughDone,
+                            // 5% steps, without the 19 tick dots they'd draw.
+                            steps = 19,
+                            colors = SliderDefaults.colors(activeTickColor = Color.Transparent, inactiveTickColor = Color.Transparent),
+                            modifier = Modifier.semantics {
+                                contentDescription = "Show background through map"
+                                stateDescription = percent
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { choosingBasemap = false }) { Text("Done") } },
+        )
+    }
+
     renaming?.let { layer ->
         var name by remember(layer.id) { mutableStateOf(layer.name) }
         AlertDialog(
@@ -519,7 +556,7 @@ fun FeatureListSheet(
             title = { Text("Trail distance") },
             text = {
                 Column {
-                    Text("Lines in the ticked folders count as trails when you measure along trails.")
+                    Text("Lines in the ticked folders count as trails when you navigate along trails.")
                     Spacer(Modifier.height(8.dp))
                     Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                         for ((folder, count) in folders) {

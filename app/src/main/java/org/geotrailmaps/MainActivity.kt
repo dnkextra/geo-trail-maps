@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -25,6 +26,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleStartEffect
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.geotrailmaps.data.ImportException
@@ -117,20 +119,51 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
 
-    fun import(uri: Uri) = scope.launch {
+    /** Imports [uris] one by one. A single map opens; several stay in the list, with a summary. */
+    fun import(uris: List<Uri>) = scope.launch {
         importing = true
+        val imported = mutableListOf<String>()
+        val errors = mutableListOf<String>()
         try {
-            openMapId = app.library.import(uri).id
-        } catch (e: ImportException) {
-            snackbar.showSnackbar(e.message ?: "Import failed")
-        } catch (e: Exception) {
-            snackbar.showSnackbar("Import failed: ${e.message ?: e.javaClass.simpleName}")
+            for (uri in uris) {
+                try {
+                    imported += app.library.import(uri).id
+                } catch (e: ImportException) {
+                    errors += e.message ?: "Import failed"
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    errors += "Import failed: ${e.message ?: e.javaClass.simpleName}"
+                }
+            }
         } finally {
             importing = false
         }
+        when {
+            uris.size == 1 && imported.size == 1 -> openMapId = imported.single()
+            errors.isEmpty() -> snackbar.showSnackbar("Imported ${imported.size} maps")
+            imported.isEmpty() && errors.size == 1 -> snackbar.showSnackbar(errors.single())
+            // The first problem, and how many more, so one bad file doesn't hide the rest.
+            else -> snackbar.showSnackbar(
+                "Imported ${imported.size} of ${uris.size} maps. ${errors.first()}" +
+                    if (errors.size > 1) " (and ${errors.size - 1} more)" else "",
+                withDismissAction = true,
+                duration = SnackbarDuration.Long,
+            )
+        }
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(::import) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> if (uris.isNotEmpty()) import(uris) }
+
+    /** The map whose PDF is being saved, while the system's save dialog is open. */
+    var savingPdfOf by rememberSaveable { mutableStateOf<String?>(null) }
+    val savePdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val id = savingPdfOf
+        savingPdfOf = null
+        if (uri != null && id != null) scope.launch {
+            snackbar.showSnackbar(if (app.library.exportPdf(id, uri)) "Saved a copy of the PDF." else "Couldn't save the PDF.")
+        }
+    }
 
     val pending by incoming.collectAsState()
     LaunchedEffect(pending) {
@@ -138,7 +171,7 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
         incoming.value = null
         openMapId = null
         showSettings = false
-        import(uri)
+        import(listOf(uri))
     }
 
     val maps by app.library.maps.collectAsState()
@@ -173,6 +206,10 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
             onRecordingClick = lastMapId?.takeIf { id -> maps.any { it.id == id } }?.let { id -> { openMapId = id } },
             onRename = app.library::rename,
             onDelete = app.library::delete,
+            onSavePdf = { map ->
+                savingPdfOf = map.id
+                savePdf.launch(map.name.replace('/', '_') + ".pdf")
+            },
             onMoveToFolder = app.library::setFolder,
             sort = mapSort,
             onSortChange = app.settings::setMapSort,

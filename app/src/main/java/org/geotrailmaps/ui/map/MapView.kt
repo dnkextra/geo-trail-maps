@@ -112,7 +112,7 @@ class MapViewport(val pageWidth: Float, val pageHeight: Float) {
 
     /**
      * Called as the bars are measured. Re-fits only during the first layout; later changes
-     * (e.g. switching to the measure panel) leave the map where it is.
+     * (e.g. switching to the Navigate panel) leave the map where it is.
      */
     fun setInsets(top: Float = insetTop, bottom: Float = insetBottom, keepCenter: Boolean = false) {
         val keep = if (keepCenter && size != IntSize.Zero) center else null
@@ -209,9 +209,11 @@ fun MapView(
     /** Sharper parts of the page over [base], in drawing order; read while drawing. */
     tiles: () -> List<RenderedRegion>,
     modifier: Modifier = Modifier,
-    /** Off while measuring, so quick taps add points instead of zooming (and aren't delayed). */
+    /** Off while tapping out points, so quick taps add them instead of zooming (and aren't delayed). */
     doubleTapZoom: Boolean = true,
     onTap: (Offset) -> Unit = {},
+    /** Null turns long press off (while a tool takes taps). */
+    onLongPress: ((Offset) -> Unit)? = null,
     onUserMove: () -> Unit = {},
     /** Drawn under the PDF page (the background map). */
     underlay: DrawScope.() -> Unit = {},
@@ -225,16 +227,19 @@ fun MapView(
     val replace = remember { Paint(Paint.FILTER_BITMAP_FLAG).apply { blendMode = BlendMode.SRC } }
     val fade = remember { Paint() }
     val currentOnTap by rememberUpdatedState(onTap)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+    val longPress = onLongPress != null
     val currentOnUserMove by rememberUpdatedState(onUserMove)
 
     Canvas(
         modifier
             .onSizeChanged { viewport.onSizeChanged(it) }
-            .pointerInput(viewport, doubleTapZoom) {
+            .pointerInput(viewport, doubleTapZoom, longPress) {
                 // Callers get positions in view coordinates, whatever the rotation.
                 detectTapGestures(
                     onTap = { currentOnTap(viewport.screenToView(it)) },
                     onDoubleTap = if (doubleTapZoom) { pos -> viewport.zoomBy(2f, viewport.screenToView(pos)) } else null,
+                    onLongPress = if (longPress) { pos -> currentOnLongPress?.invoke(viewport.screenToView(pos)) } else null,
                 )
             }
             .pointerInput(viewport) {

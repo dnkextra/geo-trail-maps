@@ -92,6 +92,8 @@ fun MapListScreen(
     onOpen: (String) -> Unit,
     onRename: (String, String) -> Unit,
     onDelete: (String) -> Unit,
+    /** Saves a copy of the map's PDF, in case the original is lost. */
+    onSavePdf: (MapEntry) -> Unit,
     onMoveToFolder: (String, String?) -> Unit,
     sort: MapSort,
     onSortChange: (MapSort) -> Unit,
@@ -150,7 +152,7 @@ fun MapListScreen(
             ExtendedFloatingActionButton(
                 onClick = onImport,
                 icon = { Icon(Icons.Filled.Add, null) },
-                text = { Text("Import map") },
+                text = { Text("Import maps") },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -190,6 +192,7 @@ fun MapListScreen(
                         onClick = { onOpen(map.id) },
                         onRename = { renaming = map },
                         onMove = { moving = map },
+                        onSavePdf = { onSavePdf(map) },
                         onDelete = { deleting = map },
                     )
                     HorizontalDivider()
@@ -308,6 +311,7 @@ private fun MapRow(
     onClick: () -> Unit,
     onRename: () -> Unit,
     onMove: () -> Unit,
+    onSavePdf: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val image by produceState<ImageBitmap?>(null, thumbnail) {
@@ -333,6 +337,7 @@ private fun MapRow(
                 DropdownMenu(menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
                     DropdownMenuItem(text = { Text("Move to folder…") }, onClick = { menu = false; onMove() })
+                    DropdownMenuItem(text = { Text("Save PDF copy…") }, onClick = { menu = false; onSavePdf() })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
                 }
             }
