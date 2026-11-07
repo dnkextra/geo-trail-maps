@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -92,9 +93,11 @@ fun MapListScreen(
     onOpen: (String) -> Unit,
     onRename: (String, String) -> Unit,
     onDelete: (String) -> Unit,
-    /** Saves a copy of the map's PDF, in case the original is lost. */
+    /** Exports the map's PDF, in case the original is lost. */
     onSavePdf: (MapEntry) -> Unit,
     onMoveToFolder: (String, String?) -> Unit,
+    /** Moves a map to the Archived section at the bottom, or back out of it. */
+    onSetArchived: (String, Boolean) -> Unit,
     sort: MapSort,
     onSortChange: (MapSort) -> Unit,
     onSettings: () -> Unit,
@@ -107,7 +110,10 @@ fun MapListScreen(
     var sortMenu by remember { mutableStateOf(false) }
     val recordingActive = TrackRecorder.state.collectAsState().value.status != TrackRecorder.Status.IDLE
     var collapsed by rememberSaveable { mutableStateOf(setOf<String>()) }
-    val folders = maps.mapNotNull { it.folder }.distinct().sortedBy { it.lowercase() }
+    // Archived maps start hidden; the section is opened by tapping its header.
+    var archiveOpen by rememberSaveable { mutableStateOf(false) }
+    val active = maps.filter { !it.archived }
+    val folders = active.mapNotNull { it.folder }.distinct().sortedBy { it.lowercase() }
     val sorted = when (sort) {
         MapSort.NAME -> maps.sortedBy { it.name.lowercase() }
         MapSort.RECENT -> maps.sortedByDescending { it.importedAt }
@@ -193,6 +199,7 @@ fun MapListScreen(
                         onRename = { renaming = map },
                         onMove = { moving = map },
                         onSavePdf = { onSavePdf(map) },
+                        onToggleArchived = { onSetArchived(map.id, !map.archived) },
                         onDelete = { deleting = map },
                     )
                     HorizontalDivider()
@@ -208,9 +215,9 @@ fun MapListScreen(
                         HorizontalDivider()
                     }
                 }
-                items(sorted.filter { it.folder == null }, key = { it.id }) { row(it) }
+                items(sorted.filter { !it.archived && it.folder == null }, key = { it.id }) { row(it) }
                 for (folder in folders) {
-                    val inFolder = sorted.filter { it.folder == folder }
+                    val inFolder = sorted.filter { !it.archived && it.folder == folder }
                     val open = folder !in collapsed
                     item(key = "folder:$folder") {
                         ListItem(
@@ -225,6 +232,21 @@ fun MapListScreen(
                         HorizontalDivider()
                     }
                     if (open) items(inFolder, key = { it.id }) { Box(Modifier.padding(start = 16.dp)) { Column { row(it) } } }
+                }
+                // Archived maps go last, in one section (their folders are kept for when they're unarchived).
+                val archived = sorted.filter { it.archived }
+                if (archived.isNotEmpty()) {
+                    item(key = "archived") {
+                        ListItem(
+                            headlineContent = { Text("Archived", style = MaterialTheme.typography.titleSmall) },
+                            supportingContent = { Text(if (archived.size == 1) "1 map" else "${archived.size} maps") },
+                            leadingContent = { Icon(Icons.Filled.Archive, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            trailingContent = { Icon(if (archiveOpen) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null) },
+                            modifier = Modifier.clickable(onClickLabel = if (archiveOpen) "Collapse" else "Expand") { archiveOpen = !archiveOpen },
+                        )
+                        HorizontalDivider()
+                    }
+                    if (archiveOpen) items(archived, key = { it.id }) { Box(Modifier.padding(start = 16.dp)) { Column { row(it) } } }
                 }
             }
         }
@@ -312,6 +334,7 @@ private fun MapRow(
     onRename: () -> Unit,
     onMove: () -> Unit,
     onSavePdf: () -> Unit,
+    onToggleArchived: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val image by produceState<ImageBitmap?>(null, thumbnail) {
@@ -336,8 +359,12 @@ private fun MapRow(
                 IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "Options") }
                 DropdownMenu(menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
-                    DropdownMenuItem(text = { Text("Move to folder…") }, onClick = { menu = false; onMove() })
-                    DropdownMenuItem(text = { Text("Save PDF copy…") }, onClick = { menu = false; onSavePdf() })
+                    if (!map.archived) DropdownMenuItem(text = { Text("Move to folder…") }, onClick = { menu = false; onMove() })
+                    DropdownMenuItem(text = { Text("Export PDF…") }, onClick = { menu = false; onSavePdf() })
+                    DropdownMenuItem(
+                        text = { Text(if (map.archived) "Unarchive" else "Archive") },
+                        onClick = { menu = false; onToggleArchived() },
+                    )
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
                 }
             }

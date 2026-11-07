@@ -52,6 +52,8 @@ data class MapEntry(
      * [NO_BASEMAP]; null until one is chosen (the last one chosen on any map is used).
      */
     val basemap: String? = null,
+    /** Moved to the Archived section at the bottom of My Maps, out of the way. */
+    val archived: Boolean = false,
 )
 
 const val NO_BASEMAP = "NONE"
@@ -159,6 +161,12 @@ class MapLibrary(private val context: Context) {
         _maps.update { list -> list.map { if (it.id == id) entry else it } }
     }
 
+    fun setArchived(id: String, archived: Boolean) {
+        val entry = get(id)?.copy(archived = archived) ?: return
+        writeMeta(entry)
+        _maps.update { list -> list.map { if (it.id == id) entry else it } }
+    }
+
     fun setBasemap(id: String, value: String) {
         val entry = get(id)?.copy(basemap = value) ?: return
         writeMeta(entry)
@@ -262,6 +270,7 @@ class MapLibrary(private val context: Context) {
             .put("folder", e.folder ?: JSONObject.NULL)
             .put("seeThrough", e.seeThrough.toDouble())
             .put("basemap", e.basemap ?: JSONObject.NULL)
+            .put("archived", e.archived)
         e.geo?.let { g ->
             json.put(
                 "geo",
@@ -297,6 +306,7 @@ class MapLibrary(private val context: Context) {
             folder = if (o.isNull("folder")) null else o.optString("folder").ifEmpty { null },
             seeThrough = o.optDouble("seeThrough", 0.0).toFloat().coerceIn(0f, 1f),
             basemap = if (o.isNull("basemap")) null else o.optString("basemap").ifEmpty { null },
+            archived = o.optBoolean("archived", false),
             geo = geo,
         )
     }

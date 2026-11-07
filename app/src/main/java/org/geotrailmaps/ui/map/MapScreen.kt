@@ -410,7 +410,7 @@ private fun MapContent(
     // Standing on another imported map? Offer it once per visit.
     val suggestedMaps = remember { mutableSetOf<String>() }
     val otherMapHere = if (myLatLon != null && !onMap && !stale) {
-        allMaps.firstOrNull { it.id != entry.id && it.geo?.contains(myLatLon) == true }
+        allMaps.firstOrNull { it.id != entry.id && !it.archived && it.geo?.contains(myLatLon) == true }
     } else null
     LaunchedEffect(otherMapHere?.id, addingTrails) {
         // Not while adding trails: opening the other map would drop them. It's offered after.
@@ -683,7 +683,7 @@ private fun MapContent(
 
     val savePdfLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) scope.launch {
-            showMessage(if (session.library.exportPdf(entry.id, uri)) "Saved a copy of the map's PDF." else "Couldn't save the PDF.")
+            showMessage(if (session.library.exportPdf(entry.id, uri)) "Exported the map's PDF." else "Couldn't export the PDF.")
         }
     }
 
@@ -1399,7 +1399,7 @@ private fun MapMenu(
             DropdownMenuItem(text = { Text("Import GPX / KML…") }, enabled = canImport, onClick = { open = false; onImport() })
             DropdownMenuItem(text = { Text("Export features (KML)") }, enabled = canExport, onClick = { open = false; onExport(true) })
             DropdownMenuItem(text = { Text("Export features (GPX)") }, enabled = canExport, onClick = { open = false; onExport(false) })
-            DropdownMenuItem(text = { Text("Save PDF copy…") }, onClick = { open = false; onSavePdf() })
+            DropdownMenuItem(text = { Text("Export PDF…") }, onClick = { open = false; onSavePdf() })
         }
     }
 }

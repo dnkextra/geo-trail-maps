@@ -161,7 +161,7 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
         val id = savingPdfOf
         savingPdfOf = null
         if (uri != null && id != null) scope.launch {
-            snackbar.showSnackbar(if (app.library.exportPdf(id, uri)) "Saved a copy of the PDF." else "Couldn't save the PDF.")
+            snackbar.showSnackbar(if (app.library.exportPdf(id, uri)) "Exported the PDF." else "Couldn't export the PDF.")
         }
     }
 
@@ -211,6 +211,7 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
                 savePdf.launch(map.name.replace('/', '_') + ".pdf")
             },
             onMoveToFolder = app.library::setFolder,
+            onSetArchived = app.library::setArchived,
             sort = mapSort,
             onSortChange = app.settings::setMapSort,
             onSettings = { showSettings = true },
