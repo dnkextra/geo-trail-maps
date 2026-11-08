@@ -59,4 +59,30 @@ class FormatsAndExportTest {
         assertTrue(gpx.contains("""<wpt lat="49.0" lon="-123.0">"""))
         assertEquals(2, Regex("<trk>").findAll(gpx).count())
     }
+
+    /** A track paused at A and resumed at B: two segments, the A to B gap neither counted nor exported as a line. */
+    private val pausedTrack = Feature(
+        type = FeatureType.LINE, name = "Walk", color = 0,
+        points = listOf(LatLon(49.0, -123.0), LatLon(49.001, -123.0), LatLon(49.1, -123.0), LatLon(49.101, -123.0)),
+        track = TrackData(List(4) { null }, List(4) { null }, segmentStarts = listOf(2)),
+    )
+
+    @Test
+    fun trackSegments() {
+        assertEquals(2, pausedTrack.segments.size)
+        // Two 111 m pieces, not the 11 km between them.
+        assertEquals(222.0, pausedTrack.length, 2.0)
+        val gpx = FeatureExport.gpx("Test map", listOf(pausedTrack))
+        assertEquals(2, Regex("<trkseg>").findAll(gpx).count())
+        val kml = FeatureExport.kml("Test map", listOf(pausedTrack))
+        assertTrue(kml.contains("<MultiGeometry>"))
+        assertEquals(2, Regex("<LineString>").findAll(kml).count())
+        // One point either side of a gap: two Points, never a line across the gap.
+        val twoFixes = pausedTrack.copy(points = pausedTrack.points.take(2), track = pausedTrack.track!!.copy(segmentStarts = listOf(1)))
+        val kml2 = FeatureExport.kml("Test map", listOf(twoFixes))
+        assertTrue(!kml2.contains("<LineString>"))
+        assertEquals(2, Regex("<Point>").findAll(kml2).count())
+        // Out-of-range starts (e.g. after points were edited) are ignored.
+        assertEquals(1, pausedTrack.copy(track = pausedTrack.track!!.copy(segmentStarts = listOf(0, 9))).segments.size)
+    }
 }

@@ -48,9 +48,9 @@ private fun screenPath(shape: FeatureGeometry.Shape, viewport: MapViewport, boun
     for (i in 0 until n) {
         val x = xy[2 * i] * s + o.x
         val y = xy[2 * i + 1] * s + o.y
-        if (i == 0) {
+        if (i == 0 || shape.startsSegment(i)) {
             path.moveTo(x, y)
-        } else if (i == n - 1 || kotlin.math.abs(x - lastX) + kotlin.math.abs(y - lastY) >= 1.5f) {
+        } else if (i == n - 1 || shape.startsSegment(i + 1) || kotlin.math.abs(x - lastX) + kotlin.math.abs(y - lastY) >= 1.5f) {
             path.lineTo(x, y)
         } else {
             continue
@@ -259,7 +259,7 @@ fun hitTest(features: List<Feature>, tap: Offset, geometry: FeatureGeometry, vie
         val segments = if (f.type == FeatureType.AREA) n else n - 1
         (0 until segments).any { i ->
             val j = (i + 1) % n
-            distanceToSegment(
+            !shape.startsSegment(j) && distanceToSegment(
                 tap,
                 Offset(xy[2 * i] * s + o.x, xy[2 * i + 1] * s + o.y),
                 Offset(xy[2 * j] * s + o.x, xy[2 * j + 1] * s + o.y),

@@ -10,7 +10,9 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -54,6 +56,8 @@ data class MapEntry(
     val basemap: String? = null,
     /** Moved to the Archived section at the bottom of My Maps, out of the way. */
     val archived: Boolean = false,
+    /** Pages in the PDF; only the first is shown. */
+    val pageCount: Int = 1,
 )
 
 const val NO_BASEMAP = "NONE"
@@ -94,6 +98,10 @@ class MapLibrary(private val context: Context) {
     private val _maps = MutableStateFlow(loadAll())
     val maps: StateFlow<List<MapEntry>> = _maps
 
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    /** Messages for the user: something couldn't be saved or read, or an import note. */
+    val messages: SharedFlow<String> = _messages
+
     fun get(id: String): MapEntry? = _maps.value.find { it.id == id }
     fun pdfFile(id: String) = File(File(root, id), "map.pdf")
     fun thumbnailFile(id: String) = File(File(root, id), "thumb.png")
@@ -115,7 +123,8 @@ class MapLibrary(private val context: Context) {
             val pdf = pdfFile(id)
             val input = context.contentResolver.openInputStream(uri) ?: throw ImportException("Couldn't open the file")
             input.use { inp -> pdf.outputStream().use { copyPdf(inp, it, displayName) } }
-            val geo = runCatching { GeoPdfParser.parse(pdf).geo }.getOrNull()
+            val info = runCatching { GeoPdfParser.parse(pdf) }.getOrNull()
+            val geo = info?.geo
             val (w, h) = try {
                 PdfPageRenderer(pdf).use { r ->
                     thumbnailFile(id).outputStream().use { r.renderThumbnail(256).compress(Bitmap.CompressFormat.PNG, 90, it) }
@@ -132,15 +141,23 @@ class MapLibrary(private val context: Context) {
                 pageWidth = w,
                 pageHeight = h,
                 geo = geo,
+                pageCount = info?.pageCount?.coerceAtLeast(1) ?: 1,
             )
             writeMeta(entry)
             _maps.update { (it + entry).sortedBy { m -> m.name.lowercase() } }
+            importNotes(entry)?.let { _messages.tryEmit(it) }
             entry
         } catch (e: Exception) {
             dir.deleteRecursively()
             throw e
         }
     }
+
+    /** What a successful import doesn't show: pages left out, or a datum whose shift isn't applied. */
+    private fun importNotes(e: MapEntry): String? = listOfNotNull(
+        if (e.pageCount > 1) "\"${e.name}\" has ${e.pageCount} pages; only the first is shown." else null,
+        if (e.geo?.oldDatum == true) "\"${e.name}\" uses an older datum (${e.geo.crsName}). Positions on it may be off by tens to hundreds of metres." else null,
+    ).joinToString(" ").ifEmpty { null }
 
     /** Writes the map's PDF, exactly as it was imported, to [uri]; false if that failed. */
     suspend fun exportPdf(id: String, uri: Uri): Boolean = withContext(Dispatchers.IO) {
@@ -155,34 +172,27 @@ class MapLibrary(private val context: Context) {
         ok
     }
 
-    fun setFolder(id: String, folder: String?) {
-        val entry = get(id)?.copy(folder = folder?.trim()?.ifEmpty { null }) ?: return
-        writeMeta(entry)
-        _maps.update { list -> list.map { if (it.id == id) entry else it } }
-    }
+    fun setFolder(id: String, folder: String?) = update(id) { it.copy(folder = folder?.trim()?.ifEmpty { null }) }
 
-    fun setArchived(id: String, archived: Boolean) {
-        val entry = get(id)?.copy(archived = archived) ?: return
-        writeMeta(entry)
-        _maps.update { list -> list.map { if (it.id == id) entry else it } }
-    }
+    fun setArchived(id: String, archived: Boolean) = update(id) { it.copy(archived = archived) }
 
-    fun setBasemap(id: String, value: String) {
-        val entry = get(id)?.copy(basemap = value) ?: return
-        writeMeta(entry)
-        _maps.update { list -> list.map { if (it.id == id) entry else it } }
-    }
+    fun setBasemap(id: String, value: String) = update(id) { it.copy(basemap = value) }
 
-    fun setSeeThrough(id: String, value: Float) {
-        val entry = get(id)?.copy(seeThrough = value) ?: return
-        writeMeta(entry)
-        _maps.update { list -> list.map { if (it.id == id) entry else it } }
-    }
+    fun setSeeThrough(id: String, value: Float) = update(id) { it.copy(seeThrough = value) }
 
-    fun rename(id: String, name: String) {
-        val entry = get(id)?.copy(name = name) ?: return
-        writeMeta(entry)
+    fun rename(id: String, name: String) = update(id) { it.copy(name = name) }
+
+    /** Saves a change to a map's details; if that fails, nothing changes, the user is told, and it returns false. */
+    private fun update(id: String, change: (MapEntry) -> MapEntry): Boolean {
+        val entry = get(id)?.let(change) ?: return false
+        try {
+            writeMeta(entry)
+        } catch (e: IOException) {
+            _messages.tryEmit("Couldn't save the change. Storage may be full.")
+            return false
+        }
         _maps.update { list -> list.map { if (it.id == id) entry else it }.sortedBy { it.name.lowercase() } }
+        return true
     }
 
     fun delete(id: String) {
@@ -215,23 +225,38 @@ class MapLibrary(private val context: Context) {
     fun loadFeatures(id: String): MapFeatures = features.getOrPut(id) {
         val file = featuresFile(id)
         if (!file.exists()) return@getOrPut MapFeatures()
-        val text = file.readText()
+        try {
+            parseFeatures(file.readText())
+        } catch (e: Exception) { // unreadable, JSONException, or a bad enum name
+            // Damaged (e.g. by a storage fault): keep it aside, so a later save can't overwrite it,
+            // and open the map without features rather than not at all.
+            val kept = file.renameTo(File(file.path + ".damaged-" + System.currentTimeMillis()))
+            _messages.tryEmit(
+                "This map's points, lines and tracks couldn't be read, so it opened without them." +
+                    if (kept) " The damaged data was kept in the app's storage." else "",
+            )
+            MapFeatures()
+        }
+    }
+
+    private fun parseFeatures(text: String): MapFeatures {
         // 0.1/0.2 stored a bare array of features.
         if (text.trimStart().startsWith("[")) {
             val arr = JSONArray(text)
-            return@getOrPut MapFeatures(features = List(arr.length()) { featureFromJson(arr.getJSONObject(it)) })
+            return MapFeatures(features = List(arr.length()) { featureFromJson(arr.getJSONObject(it)) })
         }
         val o = JSONObject(text)
         val layers = o.getJSONArray("layers")
         val list = o.getJSONArray("features")
-        MapFeatures(
+        return MapFeatures(
             layers = List(layers.length()) { layerFromJson(layers.getJSONObject(it)) },
             features = List(list.length()) { featureFromJson(list.getJSONObject(it)) },
         )
     }
 
     /** Updates the cache now and writes in the background; completes with true once written. */
-    fun saveFeatures(id: String, data: MapFeatures): Deferred<Boolean> {
+    /** [notify]: tell the user if the write fails (off when the caller explains it itself). */
+    fun saveFeatures(id: String, data: MapFeatures, notify: Boolean = true): Deferred<Boolean> {
         features[id] = data
         return writeScope.async {
             if (!File(root, id).exists()) return@async false // map was deleted
@@ -241,9 +266,12 @@ class MapLibrary(private val context: Context) {
                     .put("features", JSONArray().apply { data.features.forEach { put(featureToJson(it)) } })
                 val tmp = File(featuresFile(id).path + ".tmp")
                 tmp.writeText(json.toString())
-                tmp.renameTo(featuresFile(id))
+                if (!tmp.renameTo(featuresFile(id))) throw IOException("rename failed")
+                true
             } catch (e: IOException) {
-                false // e.g. storage full; the in-memory copy is kept
+                // E.g. storage full. The in-memory copy is kept, and the next save writes it all.
+                if (notify) _messages.tryEmit("Couldn't save your changes to this map. Storage may be full.")
+                false
             }
         }
     }
@@ -271,6 +299,7 @@ class MapLibrary(private val context: Context) {
             .put("seeThrough", e.seeThrough.toDouble())
             .put("basemap", e.basemap ?: JSONObject.NULL)
             .put("archived", e.archived)
+            .put("pageCount", e.pageCount)
         e.geo?.let { g ->
             json.put(
                 "geo",
@@ -280,7 +309,11 @@ class MapLibrary(private val context: Context) {
                     .put("neatline", JSONArray().apply { g.neatline.forEach { put(JSONArray(listOf(it.x, it.y))) } }),
             )
         }
-        metaFile(e.id).writeText(json.toString())
+        // Written aside and renamed over the old one, so a failed write can't leave it damaged
+        // (a map without readable details wouldn't be listed).
+        val tmp = File(metaFile(e.id).path + ".tmp")
+        tmp.writeText(json.toString())
+        if (!tmp.renameTo(metaFile(e.id))) throw IOException("rename failed")
     }
 
     private fun entryFromJson(o: JSONObject): MapEntry {
@@ -307,6 +340,7 @@ class MapLibrary(private val context: Context) {
             seeThrough = o.optDouble("seeThrough", 0.0).toFloat().coerceIn(0f, 1f),
             basemap = if (o.isNull("basemap")) null else o.optString("basemap").ifEmpty { null },
             archived = o.optBoolean("archived", false),
+            pageCount = o.optInt("pageCount", 1),
             geo = geo,
         )
     }
@@ -351,15 +385,18 @@ class MapLibrary(private val context: Context) {
         .put("elevations", JSONArray().apply { t.elevations.forEach { put(it ?: JSONObject.NULL) } })
         .put("durationMillis", t.durationMillis ?: JSONObject.NULL)
         .put("ascent", t.ascent ?: JSONObject.NULL)
+        .apply { if (t.segmentStarts.isNotEmpty()) put("segmentStarts", JSONArray(t.segmentStarts)) }
 
     private fun trackFromJson(o: JSONObject): TrackData {
         val times = o.getJSONArray("times")
         val elevations = o.getJSONArray("elevations")
+        val starts = o.optJSONArray("segmentStarts")
         return TrackData(
             times = List(times.length()) { if (times.isNull(it)) null else times.getLong(it) },
             elevations = List(elevations.length()) { if (elevations.isNull(it)) null else elevations.getDouble(it) },
             durationMillis = if (o.isNull("durationMillis")) null else o.getLong("durationMillis"),
             ascent = if (o.isNull("ascent")) null else o.getDouble("ascent"),
+            segmentStarts = starts?.let { a -> List(a.length()) { a.getInt(it) } }.orEmpty(),
         )
     }
 

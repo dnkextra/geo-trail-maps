@@ -495,6 +495,12 @@ fun FeatureListSheet(
                         }
                     }
                     if (basemap != null) {
+                        Text(
+                            "Online. Areas you've viewed are kept for a while and may show offline; others won't.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
                         Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 basemap.credit,

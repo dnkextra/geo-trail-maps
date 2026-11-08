@@ -31,10 +31,12 @@ class FeatureImportTest {
         )
         val layer = data.layers.single()
         assertEquals("Sunday walk", layer.name)
-        assertEquals(listOf("Cabin", "Loop (1)", "Loop (2)", "Route 1"), data.features.map { it.name })
-        assertEquals(listOf(FeatureType.POINT, FeatureType.LINE, FeatureType.LINE, FeatureType.LINE), data.features.map { it.type })
+        assertEquals(listOf("Cabin", "Loop", "Route 1"), data.features.map { it.name })
+        assertEquals(listOf(FeatureType.POINT, FeatureType.LINE, FeatureType.LINE), data.features.map { it.type })
         assertEquals("Water here", data.features[0].description)
-        assertEquals(3, data.features[2].points.size)
+        // One <trk> is one track; its three <trkseg>s (even the 1-point one) are kept as segments.
+        assertEquals(6, data.features[1].points.size)
+        assertEquals(listOf(2, 5), data.features[1].track!!.segmentStarts)
         assertTrue(data.features.all { it.layerId == layer.id })
     }
 
@@ -180,5 +182,26 @@ class FeatureImportTest {
         assertTrue(out.indexOf("<name>Mine</name>") < out.indexOf("<Folder>"))
         val again = parse("again.kml", out)
         assertEquals(6, again.features.size)
+    }
+
+    @Test
+    fun trackWithGapsRoundTripsAsOneTrack() {
+        val walk = Feature(
+            type = FeatureType.LINE, name = "Walk", color = 0,
+            points = listOf(LatLon(49.0, -123.0), LatLon(49.001, -123.0), LatLon(49.1, -123.0), LatLon(49.101, -123.0)),
+            track = TrackData(listOf(1L, 2L, 3L, 4L).map { it * 60_000 }, List(4) { null }, segmentStarts = listOf(2)),
+        )
+        for ((name, text) in listOf("walk.gpx" to FeatureExport.gpx("Walk", listOf(walk)), "walk.kml" to FeatureExport.kml("Walk", listOf(walk)))) {
+            val f = parse(name, text).features.single()
+            assertEquals(name, "Walk", f.name)
+            assertEquals(name, walk.points, f.points)
+            assertEquals(name, listOf(2), f.track!!.segmentStarts)
+            assertEquals(name, walk.length, f.length, 0.01)
+        }
+        // Time to continue from counts each part, not the gap: 1 min + 1 min.
+        assertEquals(120_000L, parse("walk.gpx", FeatureExport.gpx("Walk", listOf(walk))).features.single().track!!.resumeMillis)
+        // Separate tracks stay separate.
+        val two = FeatureExport.gpx("Two", listOf(walk.copy(track = null), walk.copy(name = "Other", track = null)))
+        assertEquals(listOf("Walk", "Other"), parse("two.gpx", two).features.map { it.name })
     }
 }

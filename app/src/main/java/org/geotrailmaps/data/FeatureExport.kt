@@ -35,13 +35,21 @@ object FeatureExport {
             appendLine("<LineStyle><color>$color</color><width>3</width></LineStyle>")
             appendLine("<PolyStyle><color>${"55" + color.substring(2)}</color></PolyStyle></Style>")
             // Include elevations when known (KML's default altitude mode keeps them on the ground).
-            val coords = f.points.indices.joinToString(" ") { i ->
+            fun coords(indices: IntRange) = indices.joinToString(" ") { i ->
                 val p = f.points[i]
                 f.track?.elevations?.getOrNull(i)?.let { "${p.lon},${p.lat},$it" } ?: "${p.lon},${p.lat}"
             }
             when (f.type) {
-                FeatureType.POINT -> appendLine("<Point><coordinates>$coords</coordinates></Point>")
-                FeatureType.LINE -> appendLine("<LineString><tessellate>1</tessellate><coordinates>$coords</coordinates></LineString>")
+                FeatureType.POINT -> appendLine("<Point><coordinates>${coords(f.points.indices)}</coordinates></Point>")
+                FeatureType.LINE -> {
+                    // A track paused and resumed elsewhere: one LineString per segment, so no line joins the gap.
+                    // A LineString needs two points: a lone point after a resume becomes a Point.
+                    val parts = segmentRanges(f).map {
+                        if (it.count() >= 2) "<LineString><tessellate>1</tessellate><coordinates>${coords(it)}</coordinates></LineString>"
+                        else "<Point><coordinates>${coords(it)}</coordinates></Point>"
+                    }
+                    appendLine(if (parts.size == 1) parts[0] else parts.joinToString("", "<MultiGeometry>", "</MultiGeometry>"))
+                }
                 FeatureType.AREA -> {
                     // KML wants the outer ring counterclockwise (positive shoelace area in lon/lat).
                     val signedArea = (f.points + f.points.first()).zipWithNext().sumOf { (a, b) -> a.lon * b.lat - b.lon * a.lat }
@@ -71,24 +79,35 @@ object FeatureExport {
             val pts = if (f.type == FeatureType.AREA) f.points + f.points.first() else f.points
             appendLine("<trk><name>${esc(f.name)}</name>")
             if (f.description.isNotBlank()) appendLine("<desc>${esc(f.description)}</desc>")
-            appendLine("<trkseg>")
-            pts.forEachIndexed { i, p ->
-                // Areas repeat the first point to close the ring; it has the first point's data.
-                val k = if (i < f.points.size) i else 0
-                val ele = f.track?.elevations?.getOrNull(k)
-                val time = f.track?.times?.getOrNull(k)
-                if (ele == null && time == null) {
-                    appendLine("""<trkpt lat="${p.lat}" lon="${p.lon}"/>""")
-                } else {
-                    append("""<trkpt lat="${p.lat}" lon="${p.lon}">""")
-                    ele?.let { append("<ele>$it</ele>") }
-                    time?.let { append("<time>${isoTime(it)}</time>") }
-                    appendLine("</trkpt>")
+            val segments = if (f.type == FeatureType.AREA) listOf(pts.indices) else segmentRanges(f)
+            for (segment in segments) {
+                appendLine("<trkseg>")
+                for (i in segment) {
+                    val p = pts[i]
+                    // Areas repeat the first point to close the ring; it has the first point's data.
+                    val k = if (i < f.points.size) i else 0
+                    val ele = f.track?.elevations?.getOrNull(k)
+                    val time = f.track?.times?.getOrNull(k)
+                    if (ele == null && time == null) {
+                        appendLine("""<trkpt lat="${p.lat}" lon="${p.lon}"/>""")
+                    } else {
+                        append("""<trkpt lat="${p.lat}" lon="${p.lon}">""")
+                        ele?.let { append("<ele>$it</ele>") }
+                        time?.let { append("<time>${isoTime(it)}</time>") }
+                        appendLine("</trkpt>")
+                    }
                 }
+                appendLine("</trkseg>")
             }
-            appendLine("</trkseg></trk>")
+            appendLine("</trk>")
         }
         appendLine("</gpx>")
+    }
+
+    /** Index ranges of a line's segments (see [Feature.segments]). */
+    private fun segmentRanges(f: Feature): List<IntRange> {
+        var start = 0
+        return f.segments.map { seg -> (start until start + seg.size).also { start += seg.size } }
     }
 
     /** KML colours are aabbggrr. */

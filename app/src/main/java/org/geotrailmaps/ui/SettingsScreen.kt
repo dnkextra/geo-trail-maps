@@ -66,6 +66,14 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
+            SectionTitle("Your data")
+            Text(
+                "Maps, tracks and features are stored on this phone. Android's backup may include them, but large maps " +
+                    "can exceed its size limit, so don't rely on it. Before uninstalling or changing phones, use each " +
+                    "map's More menu to export its features and its PDF.",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         }
     }
 }

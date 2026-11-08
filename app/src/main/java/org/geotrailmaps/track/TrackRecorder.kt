@@ -3,6 +3,7 @@ package org.geotrailmaps.track
 import android.content.Context
 import android.content.Intent
 import android.location.Location
+import android.widget.Toast
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +33,8 @@ object TrackRecorder {
         /** Per point, parallel to [points]; null where unknown. */
         val times: List<Long?> = emptyList(),
         val elevations: List<Double?> = emptyList(),
+        /** Indices of points that begin a new segment, as [org.geotrailmaps.data.TrackData.segmentStarts]. */
+        val segmentStarts: List<Int> = emptyList(),
         /** Set when continuing a saved track: Stop updates that feature, on [continuingMapId]. */
         val continuingId: String? = null,
         val continuingMapId: String? = null,
@@ -56,6 +59,11 @@ object TrackRecorder {
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var altitudeRef: Double? = null
     private var recovered = false
+    /**
+     * After a resume, or continuing a saved track: the next fix starts a new segment unless
+     * it's where the track left off, so travel while not recording isn't counted or drawn.
+     */
+    private var gap = false
 
     /** Call once at startup; restores an unfinished track as paused. */
     fun init(context: Context) {
@@ -72,11 +80,19 @@ object TrackRecorder {
     /** True once if [init] restored a track left over from a previous run. */
     fun takeRecoveredFlag(): Boolean = recovered.also { recovered = false }
 
-    /** Starts a new track, or continues [from] (a saved track on map [mapId]) where it ended. */
-    fun start(context: Context, from: Feature? = null, mapId: String? = null) {
+    /** True while the last track's save is being written; its log mustn't be replaced yet. */
+    private var saving = false
+
+    /**
+     * Starts a new track, or continues [from] (a saved track on map [mapId]) where it ended.
+     * False (and nothing starts) while the previous track is still being saved.
+     */
+    fun start(context: Context, from: Feature? = null, mapId: String? = null): Boolean {
+        if (saving) return false
         val now = System.currentTimeMillis()
         altitudeRef = null
         generation++
+        gap = from != null
         var s = State(status = Status.RECORDING, startedAt = now, resumedAt = now, continuingId = from?.id, continuingMapId = from?.let { mapId })
         val log = StringBuilder("START,$now,${from?.id ?: ""},${s.continuingMapId ?: ""}\n")
         if (from != null) {
@@ -87,17 +103,21 @@ object TrackRecorder {
                 points = from.points,
                 times = from.points.indices.map { from.track?.times?.getOrNull(it) },
                 elevations = from.points.indices.map { from.track?.elevations?.getOrNull(it) },
+                segmentStarts = from.track?.segmentStarts.orEmpty().filter { it in 1 until from.points.size },
                 distance = from.length,
                 ascent = from.track?.ascent ?: 0.0,
                 pastMillis = past,
             )
             log.append("BASE,$past,${s.ascent},${s.startedAt}\n")
-            from.points.forEachIndexed { i, p -> log.append("P,${p.lat},${p.lon},${s.elevations[i] ?: ""},${s.times[i] ?: ""}\n") }
+            from.points.forEachIndexed { i, p ->
+                if (i in s.segmentStarts) log.append("SEG\n")
+                log.append("P,${p.lat},${p.lon},${s.elevations[i] ?: ""},${s.times[i] ?: ""}\n") }
             log.append("RESUME,$now\n")
         }
         _state.value = s
         file?.writeText(log.toString())
         startService(context)
+        return true
     }
 
     fun pause(context: Context) {
@@ -114,6 +134,7 @@ object TrackRecorder {
         if (s.status != Status.PAUSED) return
         val now = System.currentTimeMillis()
         altitudeRef = null // don't count the climb made while paused
+        gap = true
         _state.value = s.copy(status = Status.RECORDING, resumedAt = now)
         append("RESUME,$now")
         startService(context)
@@ -125,7 +146,10 @@ object TrackRecorder {
      */
     fun finish(context: Context): State {
         val s = _state.value
-        val result = s.copy(status = Status.PAUSED, pastMillis = s.elapsedMillis())
+        val now = System.currentTimeMillis()
+        val result = s.copy(status = Status.PAUSED, pastMillis = s.elapsedMillis(now))
+        // Kept in the log, so if the save fails the recovered track's time stops here too.
+        if (s.status == Status.RECORDING) append("PAUSE,$now")
         stopService(context)
         _state.value = State()
         return result
@@ -137,15 +161,26 @@ object TrackRecorder {
     }
 
     /**
-     * Deletes the recovery log once [saved] (the write of the saved track) completes. Runs in an
-     * app-wide scope, so leaving the screen doesn't cancel it, and does nothing if another
-     * recording has started since.
+     * Deletes the recovery log once [saved] (the write of [track] as feature [featureId] on map
+     * [mapId]) completes. Runs in an app-wide scope, so leaving the screen doesn't cancel it, and
+     * does nothing if another recording has started since.
+     *
+     * If the write fails (e.g. storage full), the track comes back paused, set to update that
+     * feature, so stopping it again retries the save without making a duplicate.
      */
-    fun clearLogAfter(saved: Deferred<Boolean>) {
+    fun clearLogAfter(saved: Deferred<Boolean>, context: Context, track: State, featureId: String, mapId: String) {
         val gen = generation
+        val app = context.applicationContext
+        saving = true
         cleanupScope.launch {
-            // Only once the track is really on disk; a failed write keeps the log for recovery.
-            if (saved.await() && gen == generation) clearLog()
+            val ok = try { saved.await() } finally { saving = false }
+            if (gen != generation || _state.value.status != Status.IDLE) return@launch
+            if (ok) return@launch clearLog()
+            _state.value = track.copy(status = Status.PAUSED, continuingId = featureId, continuingMapId = mapId)
+            gap = true
+            // The log is kept for recovery; point it at the feature too.
+            append("LINK,$featureId,$mapId")
+            Toast.makeText(app, "The track wasn't saved, so it's paused. Storage may be full: free some space, then stop it again.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -168,15 +203,22 @@ object TrackRecorder {
         val p = LatLon(location.latitude, location.longitude)
         val last = s.points.lastOrNull()
         val step = last?.let { Geodesy.distance(it, p) } ?: 0.0
-        if (last != null && step < MIN_SPACING_M) return // standing still: ignore GPS jitter
+        if (last != null && step < MIN_SPACING_M) {
+            gap = false // resumed where it left off: carry on the same segment
+            return // standing still: ignore GPS jitter
+        }
+        val newSegment = gap && last != null
+        gap = false
         val alt = if (location.hasAltitude()) location.altitude else null
         _state.value = s.copy(
             points = s.points + p,
             times = s.times + location.time,
             elevations = s.elevations + alt,
-            distance = s.distance + step,
+            segmentStarts = if (newSegment) s.segmentStarts + s.points.size else s.segmentStarts,
+            distance = s.distance + if (newSegment) 0.0 else step,
             ascent = s.ascent + climb(alt),
         )
+        if (newSegment) append("SEG")
         append("P,${p.lat},${p.lon},${alt ?: ""},${location.time}")
     }
 
@@ -198,6 +240,8 @@ object TrackRecorder {
         val points = ArrayList<LatLon>()
         val times = ArrayList<Long?>()
         val elevations = ArrayList<Double?>()
+        val segmentStarts = ArrayList<Int>()
+        var newSegment = false
         // Points carried over from a saved track: their distance counts, their ascent is already in BASE.
         var basePoints = false
         for (line in lines) {
@@ -206,7 +250,7 @@ object TrackRecorder {
             try {
             when (v[0]) {
                 "START" -> v[1].toLong().let {
-                    points.clear(); times.clear(); elevations.clear()
+                    points.clear(); times.clear(); elevations.clear(); segmentStarts.clear()
                     s = State(
                         status = Status.RECORDING, startedAt = it, resumedAt = it,
                         continuingId = v.getOrNull(2)?.ifEmpty { null },
@@ -223,11 +267,15 @@ object TrackRecorder {
                     basePoints = false
                     altitudeRef = null
                 }
+                "SEG" -> newSegment = true
+                "LINK" -> s = s.copy(continuingId = v[1].ifEmpty { null }, continuingMapId = v[2].ifEmpty { null })
                 "P" -> {
                     val p = LatLon(v[1].toDouble(), v[2].toDouble())
                     val alt = v[3].toDoubleOrNull()
                     val time = v.getOrNull(4)?.toLongOrNull()
-                    val step = points.lastOrNull()?.let { Geodesy.distance(it, p) } ?: 0.0
+                    if (newSegment && points.isNotEmpty()) segmentStarts += points.size
+                    val step = if (newSegment) 0.0 else points.lastOrNull()?.let { Geodesy.distance(it, p) } ?: 0.0
+                    newSegment = false
                     val gained = if (basePoints) 0.0 else climb(alt)
                     points += p
                     times += time
@@ -241,7 +289,7 @@ object TrackRecorder {
             }
         }
         if (s.startedAt == 0L) return
-        s = s.copy(points = points, times = times, elevations = elevations)
+        s = s.copy(points = points, times = times, elevations = elevations, segmentStarts = segmentStarts)
         // The app died while recording: count time up to the last point, then come back paused.
         if (s.status == Status.RECORDING) {
             s = s.copy(status = Status.PAUSED, pastMillis = s.pastMillis + (maxOf(lastPointTime, s.resumedAt) - s.resumedAt))

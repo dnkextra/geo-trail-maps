@@ -181,6 +181,7 @@ import org.geotrailmaps.render.BasemapSource
 import org.geotrailmaps.render.BasemapTiles
 import org.geotrailmaps.ui.theme.MapStyle
 import java.io.File
+import java.io.IOException
 
 @Composable
 fun MapScreen(
@@ -250,6 +251,8 @@ private fun MapContent(
 
     val location by tracker.location.collectAsState()
     val heading by tracker.heading.collectAsState()
+    val locationOn by tracker.enabled.collectAsState()
+    val openLocationSettings = { context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
     val format by settings.coordinateFormat.collectAsState()
     val units by settings.units.collectAsState()
     // Each map keeps its own background; one opened before it had a choice gets the last one chosen.
@@ -433,6 +436,18 @@ private fun MapContent(
         if (TrackRecorder.takeRecoveredFlag()) showMessage("An unfinished track was recovered. Resume or stop it below.")
     }
 
+    // Once per map opened: without a connection, only background areas viewed before can show.
+    val basemapOffline = basemapOn && basemap.offline
+    var toldOffline by remember { mutableStateOf(false) }
+    LaunchedEffect(basemapOffline) {
+        if (basemapOffline && !toldOffline) {
+            // After any message already showing (e.g. a recovered track), not instead of it.
+            snapshotFlow { snackbar.currentSnackbarData }.first { it == null }
+            toldOffline = true
+            showMessage("Can't reach the map server. The background map shows only areas viewed before.")
+        }
+    }
+
     fun exitCompass() {
         compass = false
         val from = viewport.rotation
@@ -453,8 +468,9 @@ private fun MapContent(
         if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        TrackRecorder.start(context.applicationContext)
-        showMessage("Recording a track.")
+        if (!TrackRecorder.start(context.applicationContext)) return run { showMessage("Still saving the last track. Try again in a moment.") }
+        if (locationOn) showMessage("Recording a track.")
+        else showMessage("Recording a track, but device location is off. Turn it on to record points.", SnackbarDuration.Long)
     }
 
     fun saveTrack() {
@@ -464,7 +480,7 @@ private fun MapContent(
             TrackRecorder.clearLog()
             return run { showMessage("The track was too short to save.") }
         }
-        val data = TrackData(track.times, track.elevations, track.elapsedMillis(), track.ascent)
+        val data = TrackData(track.times, track.elevations, track.elapsedMillis(), track.ascent, track.segmentStarts)
         // Continuing a saved track updates it; otherwise it's a new track in the Tracks layer.
         val continued = track.continuingId?.let { id -> session.features.find { it.id == id } }
         // Continued from a track on another map: update it there, not here.
@@ -480,10 +496,11 @@ private fun MapContent(
                         layers = saved.layers.map { if (it.id == updated.layerId) it.copy(visible = true) else it },
                         features = saved.features.map { if (it.id == updated.id) updated else it },
                     ),
+                    notify = false, // the recorder explains a failure
                 )
-                TrackRecorder.clearLogAfter(job)
+                TrackRecorder.clearLogAfter(job, context, track, updated.id, otherMapId)
                 val mapName = allMaps.find { it.id == otherMapId }?.name ?: "the other map"
-                showMessage("Saved \"${original.name}\" on \"$mapName\", where it was started.")
+                scope.launch { if (job.await()) showMessage("Saved \"${original.name}\" on \"$mapName\", where it was started.") }
                 return
             }
         }
@@ -500,7 +517,7 @@ private fun MapContent(
         }
         f.layerId?.let { session.setLayerVisible(it, true) }
         // Keep the recovery log until the track is safely on disk.
-        TrackRecorder.clearLogAfter(session.upsert(f))
+        TrackRecorder.clearLogAfter(session.upsert(f, notify = false), context, track, f.id, entry.id)
         selectedId = f.id
         editingId = f.id
     }
@@ -510,7 +527,7 @@ private fun MapContent(
         if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        TrackRecorder.start(context.applicationContext, from = f, mapId = entry.id)
+        if (!TrackRecorder.start(context.applicationContext, from = f, mapId = entry.id)) return run { showMessage("Still saving the last track. Try again in a moment.") }
         showMessage("Continuing \"${f.name}\". Stop saves it into the same track.")
     }
 
@@ -738,6 +755,10 @@ private fun MapContent(
         when {
             !hasLocationPermission -> onRequestLocationPermission()
             geo == null -> showMessage("This PDF has no location information.")
+            !locationOn -> {
+                showMessage("Device location is off.")
+                openLocationSettings()
+            }
             myLatLon == null -> showMessage("Waiting for GPS…")
             !onMap -> showMessage("You are ${Formats.distance(geo.distanceFromMap(myLatLon), units)} from this map.")
             // Following would pull the crosshair or the points being tapped away on every fix.
@@ -776,7 +797,10 @@ private fun MapContent(
     }
 
     val recordingFeature = remember(recording.points) {
-        Feature(id = RECORDING_ID, type = FeatureType.LINE, name = "", points = recording.points, color = MapStyle.recordingTrack.toArgb())
+        Feature(
+            id = RECORDING_ID, type = FeatureType.LINE, name = "", points = recording.points, color = MapStyle.recordingTrack.toArgb(),
+            track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts),
+        )
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -909,6 +933,7 @@ private fun MapContent(
                         arrowAngle = if (myLatLon != null && proj != null) screenAngle(proj, viewport, myLatLon, target.position) else null,
                         units = units,
                         onStop = { navTarget = null },
+                        locationOn = locationOn,
                     )
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -957,7 +982,13 @@ private fun MapContent(
                     onImport = { importLauncher.launch(IMPORT_TYPES) },
                     onSavePdf = { savePdfLauncher.launch(entry.name.replace('/', '_') + ".pdf") },
                     onZoomToMap = { following = false; viewport.fit() },
-                    onExport = { kml -> shareFeatures(context, entry.name, session.features, session.layers, kml) },
+                    onExport = { kml ->
+                        val features = session.features.toList()
+                        val layers = session.layers.toList()
+                        scope.launch {
+                            if (!shareFeatures(context, entry.name, features, layers, kml)) showMessage("Couldn't export the features. Storage may be full.")
+                        }
+                    },
                 )
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)),
@@ -1203,7 +1234,7 @@ private fun MapContent(
                         )
                     } else {
                         Column {
-                        StatusLine(geo, location, myLatLon, onMap, stale, fixAgeSeconds, hasLocationPermission, format, units, onRequestLocationPermission)
+                        StatusLine(geo, location, myLatLon, onMap, stale, fixAgeSeconds, hasLocationPermission, locationOn, format, units, onRequestLocationPermission, openLocationSettings)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                             ToolbarButton(Icons.Filled.Add, "Add", enabled = geo != null) {
                                 // Aim with the crosshair, starting at your position when you're on the map.
@@ -1320,8 +1351,8 @@ private fun MapContent(
                     session.setLayerVisible(layer.id, visible)
                 },
                 onBasemap = { source ->
-                    session.setBasemap(source)
-                    settings.setBasemap(source) // for maps opened later that haven't chosen yet
+                    // Also for maps opened later that haven't chosen yet.
+                    if (session.setBasemap(source)) settings.setBasemap(source)
                 },
                 onSeeThrough = { session.seeThrough = it },
                 onSeeThroughDone = session::saveSeeThrough,
@@ -1413,15 +1444,19 @@ private fun StatusLine(
     stale: Boolean,
     fixAgeSeconds: Double?,
     hasPermission: Boolean,
+    locationOn: Boolean,
     format: CoordinateFormat,
     units: Units,
     onRequestPermission: () -> Unit,
+    onOpenLocationSettings: () -> Unit,
 ) {
     val text: String
     var action: (() -> Unit)? = null
+    var actionLabel = "Allow"
     when {
         geo == null -> text = "This PDF has no location information, so GPS is unavailable."
         !hasPermission -> { text = "Location permission is off."; action = onRequestPermission }
+        !locationOn -> { text = "Device location is off."; action = onOpenLocationSettings; actionLabel = "Turn on" }
         myLatLon == null -> text = "Waiting for GPS…"
         stale -> {
             val minutes = ((fixAgeSeconds ?: 0.0) / 60).toInt()
@@ -1443,7 +1478,7 @@ private fun StatusLine(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(text, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (action != null) TextButton(onClick = action) { Text("Enable") }
+        if (action != null) TextButton(onClick = action) { Text(actionLabel) }
     }
 }
 
@@ -1816,10 +1851,12 @@ private fun MapInfoDialog(entry: MapEntry, me: LatLon?, format: CoordinateFormat
         add("File size" to android.text.format.Formatter.formatShortFileSize(LocalContext.current, entry.fileSize))
         if (basemap != null) add("Background map" to "${basemap.label} · ${basemap.credit}")
         add("Page size" to "${entry.pageWidth} × ${entry.pageHeight} pt")
+        if (entry.pageCount > 1) add("Pages" to "${entry.pageCount}; only the first is shown")
         if (geo == null) {
             add("Georeferenced" to "No")
         } else {
             add("Coordinate system" to (geo.crsName ?: "Unknown"))
+            if (geo.oldDatum) add("Accuracy" to "This datum's shift from GPS (WGS84) isn't applied, so positions may be off by tens to hundreds of metres.")
             add("Map centre" to Formats.coordinate(geo.center, format))
             if (me != null) {
                 val d = geo.distanceFromMap(me)
@@ -1844,17 +1881,27 @@ private fun MapInfoDialog(entry: MapEntry, me: LatLon?, format: CoordinateFormat
     )
 }
 
-private fun shareFeatures(context: Context, mapName: String, features: List<Feature>, layers: List<FeatureLayer>, kml: Boolean) {
-    val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-    val safeName = mapName.replace(Regex("[^A-Za-z0-9._ -]"), "_").ifBlank { "features" }
-    val file = File(dir, "$safeName.${if (kml) "kml" else "gpx"}")
-    file.writeText(if (kml) FeatureExport.kml(mapName, features, layers) else FeatureExport.gpx(mapName, features))
+/** Writes the features to a file in the background, then offers to share it; false if writing failed. */
+private suspend fun shareFeatures(context: Context, mapName: String, features: List<Feature>, layers: List<FeatureLayer>, kml: Boolean): Boolean {
+    val file = withContext(Dispatchers.IO) {
+        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+        val safeName = mapName.replace(Regex("[^A-Za-z0-9._ -]"), "_").ifBlank { "features" }
+        val file = File(dir, "$safeName.${if (kml) "kml" else "gpx"}")
+        try {
+            file.writeText(if (kml) FeatureExport.kml(mapName, features, layers) else FeatureExport.gpx(mapName, features))
+            file
+        } catch (e: IOException) {
+            file.delete()
+            null
+        }
+    } ?: return false
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
     val send = Intent(Intent.ACTION_SEND)
         .setType(if (kml) "application/vnd.google-earth.kml+xml" else "application/gpx+xml")
         .putExtra(Intent.EXTRA_STREAM, uri)
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     context.startActivity(Intent.createChooser(send, "Export features"))
+    return true
 }
 
 private const val MAX_IMPORT_BYTES = 50 * 1024 * 1024

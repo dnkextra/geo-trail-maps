@@ -101,14 +101,15 @@ fun MapListScreen(
     sort: MapSort,
     onSortChange: (MapSort) -> Unit,
     onSettings: () -> Unit,
-    /** Opens the map last viewed, from the "Recording a track" row; null when there isn't one. */
+    /** Opens a map to manage the recording from (the last one viewed); null when there isn't one. */
     onRecordingClick: (() -> Unit)? = null,
 ) {
     var renaming by remember { mutableStateOf<MapEntry?>(null) }
     var deleting by remember { mutableStateOf<MapEntry?>(null) }
     var moving by remember { mutableStateOf<MapEntry?>(null) }
     var sortMenu by remember { mutableStateOf(false) }
-    val recordingActive = TrackRecorder.state.collectAsState().value.status != TrackRecorder.Status.IDLE
+    val recordingStatus = TrackRecorder.state.collectAsState().value.status
+    val recordingActive = recordingStatus != TrackRecorder.Status.IDLE
     var collapsed by rememberSaveable { mutableStateOf(setOf<String>()) }
     // Archived maps start hidden; the section is opened by tapping its header.
     var archiveOpen by rememberSaveable { mutableStateOf(false) }
@@ -207,8 +208,13 @@ fun MapListScreen(
                 if (recordingActive) {
                     item(key = "recording") {
                         ListItem(
-                            headlineContent = { Text("Recording a track") },
-                            supportingContent = { Text("Open a map to see it, pause or stop.") },
+                            headlineContent = { Text(if (recordingStatus == TrackRecorder.Status.RECORDING) "Recording a track" else "Track paused, not recording") },
+                            supportingContent = {
+                                Text(
+                                    if (recordingStatus == TrackRecorder.Status.RECORDING) "Open a map to see it, pause or stop."
+                                    else "Open a map to see it, resume or stop and save it.",
+                                )
+                            },
                             leadingContent = { Icon(Icons.Filled.FiberManualRecord, null, tint = MapStyle.recordingTrack) },
                             modifier = if (onRecordingClick != null) Modifier.clickable(onClickLabel = "Open map", onClick = onRecordingClick) else Modifier,
                         )

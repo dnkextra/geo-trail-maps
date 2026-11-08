@@ -17,6 +17,13 @@ class GeoReference(
     /** Human readable coordinate system name, if the file declares one. */
     val crsName: String?,
 ) {
+    /**
+     * True when the coordinate system names a datum that differs from WGS84 by more than GPS
+     * accuracy (e.g. NAD27). Datum shifts aren't applied, so positions on such maps are off.
+     */
+    val oldDatum: Boolean
+        get() = crsName?.replace('_', ' ')?.let { n -> OLD_DATUMS.any { n.contains(it, ignoreCase = true) } } == true
+
     private val projection = LocalProjection(
         LatLon(controlPoints.map { it.first.lat }.average(), controlPoints.map { it.first.lon }.average()),
     )
@@ -73,3 +80,5 @@ class GeoReference(
     val center: LatLon
         get() = toLatLon(PagePoint(neatline.map { it.x }.average(), neatline.map { it.y }.average()))
 }
+
+private val OLD_DATUMS = listOf("NAD27", "NAD 27", "NAD 1927", "North American 1927", "ED50", "European 1950", "OSGB", "Tokyo", "Pulkovo")

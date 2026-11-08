@@ -1,7 +1,10 @@
 package org.geotrailmaps.location
 
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.hardware.GeomagneticField
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -35,6 +38,15 @@ class LocationTracker(private val context: Context) : LocationListener, SensorEv
     private val _heading = MutableStateFlow<Float?>(null)
     val heading: StateFlow<Float?> = _heading
 
+    /** Whether location is turned on for the device (checked while started). */
+    private val _enabled = MutableStateFlow(true)
+    val enabled: StateFlow<Boolean> = _enabled
+    private val modeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            _enabled.value = locationManager.isLocationEnabled
+        }
+    }
+
     private var running = false
     private var declination = 0f
 
@@ -43,6 +55,8 @@ class LocationTracker(private val context: Context) : LocationListener, SensorEv
     fun start() {
         if (running) return
         running = true
+        _enabled.value = locationManager.isLocationEnabled
+        context.registerReceiver(modeReceiver, IntentFilter(LocationManager.MODE_CHANGED_ACTION))
         try {
             startLocationUpdates()
         } catch (e: SecurityException) {
@@ -77,6 +91,7 @@ class LocationTracker(private val context: Context) : LocationListener, SensorEv
     fun stop() {
         if (!running) return
         running = false
+        context.unregisterReceiver(modeReceiver)
         locationManager.removeUpdates(this)
         sensorManager.unregisterListener(this)
     }

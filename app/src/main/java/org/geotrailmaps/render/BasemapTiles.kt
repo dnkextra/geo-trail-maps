@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.LruCache
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.geotrailmaps.geo.LatLon
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlin.math.PI
@@ -112,6 +114,10 @@ class BasemapTiles(context: Context) {
     var version by mutableIntStateOf(0)
         private set
 
+    /** True after a download failed for lack of a connection, until one succeeds. */
+    var offline by mutableStateOf(false)
+        private set
+
     fun cached(source: BasemapSource, tile: Tile): Bitmap? = memory.get(Key(source, tile))
 
     /** Makes [tiles] the visible set and queues the ones not loaded yet. Call from the main thread. */
@@ -135,9 +141,11 @@ class BasemapTiles(context: Context) {
             var bitmap = withContext(disk) {
                 if (key !in wanted) { skipped = true; null } else runCatching { readCached(key) }.getOrNull()
             }
+            var downloaded: Result<Bitmap?>? = null
             if (bitmap == null && !skipped) bitmap = withContext(network) {
-                if (key !in wanted) { skipped = true; null } else runCatching { download(key) }.getOrNull()
+                if (key !in wanted) { skipped = true; null } else runCatching { download(key) }.also { downloaded = it }.getOrNull()
             }
+            downloaded?.let { r -> if (r.exceptionOrNull() is IOException) offline = true else if (r.getOrNull() != null) offline = false }
             inFlight -= key
             // Wanted again while it was being skipped: that request found it in flight.
             if (skipped) { if (key in wanted) enqueue(key); return@launch }

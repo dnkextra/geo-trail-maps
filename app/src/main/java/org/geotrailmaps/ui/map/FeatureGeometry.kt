@@ -18,7 +18,11 @@ class FeatureGeometry(private val geo: GeoReference) {
         val minY: Float,
         val maxX: Float,
         val maxY: Float,
-    )
+        /** Point indices where a new segment starts (no line from the point before), ascending. */
+        val segmentStarts: IntArray = IntArray(0),
+    ) {
+        fun startsSegment(i: Int) = segmentStarts.isNotEmpty() && segmentStarts.binarySearch(i) >= 0
+    }
 
     private val shapes = ConcurrentHashMap<String, Shape>()
 
@@ -38,6 +42,7 @@ class FeatureGeometry(private val geo: GeoReference) {
             minX = minOf(minX, xy[i]); maxX = maxOf(maxX, xy[i])
             minY = minOf(minY, xy[i + 1]); maxY = maxOf(maxY, xy[i + 1])
         }
-        return Shape(f.points, xy, minX, minY, maxX, maxY).also { shapes[f.id] = it }
+        val starts = f.track?.segmentStarts.orEmpty().filter { it in 1 until f.points.size }.sorted().toIntArray()
+        return Shape(f.points, xy, minX, minY, maxX, maxY, starts).also { shapes[f.id] = it }
     }
 }

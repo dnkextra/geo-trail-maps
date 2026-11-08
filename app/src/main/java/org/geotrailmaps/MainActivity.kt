@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -107,6 +109,17 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
         }
     }
     LaunchedEffect(Unit) { if (!hasLocationPermission) requestLocationPermission() }
+    // Failed saves and import notes, from any screen; a repeat within a few seconds isn't shown again.
+    LaunchedEffect(Unit) {
+        var last = "" to 0L
+        app.library.messages.collect { message ->
+            val now = SystemClock.elapsedRealtime()
+            if (message != last.first || now - last.second > 5_000) {
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                last = message to now
+            }
+        }
+    }
     LifecycleStartEffect(hasLocationPermission) {
         hasLocationPermission = permissionGranted() // may have been granted in system settings
         if (hasLocationPermission) app.tracker.start()
@@ -203,7 +216,9 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
             snackbar = snackbar,
             onImport = { picker.launch(arrayOf("application/pdf", "application/octet-stream")) },
             onOpen = { openMapId = it },
-            onRecordingClick = lastMapId?.takeIf { id -> maps.any { it.id == id } }?.let { id -> { openMapId = id } },
+            // After a restart there's no last map: use the one a continued track came from, else any.
+            onRecordingClick = (listOfNotNull(lastMapId, TrackRecorder.state.value.continuingMapId).firstOrNull { id -> maps.any { it.id == id } } ?: maps.firstOrNull()?.id)
+                ?.let { id -> { openMapId = id } },
             onRename = app.library::rename,
             onDelete = app.library::delete,
             onSavePdf = { map ->

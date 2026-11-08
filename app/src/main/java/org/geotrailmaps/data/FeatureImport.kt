@@ -49,28 +49,29 @@ object FeatureImport {
 
     private fun readGpx(root: Element, layerId: String, color: Int): Pair<String?, List<Feature>> {
         val out = ArrayList<Feature>()
-        fun line(name: String, desc: String, pts: List<Element>) {
-            val kept = pts.mapNotNull { e -> gpxPoint(e)?.let { e to it } }
-            if (kept.size < 2) return
-            out += Feature(
-                type = FeatureType.LINE, name = name, description = desc, points = kept.map { it.second }, color = color, layerId = layerId,
-                track = trackData(
-                    kept.map { (e, _) -> e.childText("time")?.let(::parseTime) },
-                    kept.map { (e, _) -> elevation(e.childText("ele")) },
-                ),
-            )
+        /** One line from [segments] of points (a track's trksegs; gaps between them aren't joined). */
+        fun line(name: String, desc: String, segments: List<List<Element>>) {
+            val parts = segments.map { pts ->
+                val kept = pts.mapNotNull { e -> gpxPoint(e)?.let { e to it } }
+                Geometry(
+                    FeatureType.LINE, kept.map { it.second },
+                    trackData(kept.map { (e, _) -> e.childText("time")?.let(::parseTime) }, kept.map { (e, _) -> elevation(e.childText("ele")) }),
+                )
+            }.filter { it.points.isNotEmpty() }
+            val g = if (parts.size > 1) joinParts(parts) else parts.firstOrNull() ?: return
+            if (g.points.size < 2) return
+            out += Feature(type = FeatureType.LINE, name = name, description = desc, points = g.points, color = color, layerId = layerId, track = g.track)
         }
         for (wpt in root.children("wpt")) {
             val p = gpxPoint(wpt) ?: continue
             out += Feature(type = FeatureType.POINT, name = wpt.childText("name") ?: "Waypoint", description = gpxDescription(wpt), points = listOf(p), color = color, layerId = layerId)
         }
         for ((i, trk) in root.children("trk").withIndex()) {
-            val name = trk.childText("name") ?: "Track ${i + 1}"
-            val segments = trk.children("trkseg").map { seg -> seg.children("trkpt") }.filter { s -> s.count { gpxPoint(it) != null } >= 2 }
-            segments.forEachIndexed { s, pts -> line(if (segments.size > 1) "$name (${s + 1})" else name, gpxDescription(trk), pts) }
+            // One <trk> is one track, even in several <trkseg>s (e.g. paused while moving).
+            line(trk.childText("name") ?: "Track ${i + 1}", gpxDescription(trk), trk.children("trkseg").map { it.children("trkpt") })
         }
         for ((i, rte) in root.children("rte").withIndex()) {
-            line(rte.childText("name") ?: "Route ${i + 1}", gpxDescription(rte), rte.children("rtept"))
+            line(rte.childText("name") ?: "Route ${i + 1}", gpxDescription(rte), listOf(rte.children("rtept")))
         }
         val name = root.children("metadata").firstOrNull()?.childText("name")
         return name to out
@@ -90,6 +91,14 @@ object FeatureImport {
             val desc = pm.childText("description")?.let(::stripHtml).orEmpty()
             val geometries = ArrayList<Geometry>()
             pm.children().forEach { collectGeometry(it, geometries) }
+            // Several lines in one placemark (a MultiGeometry) are one line with gaps, e.g. a track
+            // paused while moving; it goes where the first of them was.
+            val lines = geometries.filter { it.type == FeatureType.LINE }
+            if (lines.size > 1) {
+                val at = geometries.indexOf(lines.first())
+                geometries.removeAll(lines)
+                geometries.add(at, joinParts(lines))
+            }
             geometries.forEachIndexed { i, g ->
                 out += Feature(
                     type = g.type,
@@ -161,6 +170,17 @@ object FeatureImport {
         }
 
     /** Track data only when the file actually had times or elevations. */
+    /** Lines joined into one, with where each began kept as [TrackData.segmentStarts]. */
+    private fun joinParts(parts: List<Geometry>): Geometry = Geometry(
+        FeatureType.LINE,
+        parts.flatMap { it.points },
+        TrackData(
+            times = parts.flatMap { p -> p.track?.times ?: List(p.points.size) { null } },
+            elevations = parts.flatMap { p -> p.track?.elevations ?: List(p.points.size) { null } },
+            segmentStarts = parts.runningFold(0) { n, p -> n + p.points.size }.drop(1).dropLast(1),
+        ),
+    )
+
     private fun trackData(times: List<Long?>, elevations: List<Double?>): TrackData? =
         if (times.all { it == null } && elevations.all { it == null }) null else TrackData(times, elevations)
 

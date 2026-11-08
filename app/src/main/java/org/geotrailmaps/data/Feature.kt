@@ -30,10 +30,19 @@ data class Feature(
     /** A line used for trail distance by itself (its layer can also make it one). */
     val trail: Boolean = false,
 ) {
+    /** The points split where a track was paused or continued from elsewhere; one list for anything else. */
+    val segments: List<List<LatLon>>
+        get() {
+            val starts = track?.segmentStarts.orEmpty().filter { it in 1 until points.size }.distinct().sorted()
+            if (type != FeatureType.LINE || starts.isEmpty()) return listOf(points)
+            return (listOf(0) + starts + points.size).zipWithNext { a, b -> points.subList(a, b) }
+        }
+
+    /** Gaps between track segments don't count. */
     val length: Double
         get() = when (type) {
             FeatureType.POINT -> 0.0
-            FeatureType.LINE -> Geodesy.pathLength(points)
+            FeatureType.LINE -> segments.sumOf { Geodesy.pathLength(it) }
             FeatureType.AREA -> Geodesy.pathLength(points + points.first())
         }
 
@@ -49,10 +58,14 @@ data class TrackData(
     val elevations: List<Double?>,
     val durationMillis: Long? = null,
     val ascent: Double? = null,
+    /** Indices of points that begin a new segment (after a pause with movement); empty for one segment. */
+    val segmentStarts: List<Int> = emptyList(),
 ) {
-    /** Recording time to resume from: the stored moving time, else the span of the timestamps. */
+    /** Recording time to resume from: the stored moving time, else the span of the timestamps in each segment. */
     val resumeMillis: Long
-        get() = durationMillis ?: times.filterNotNull().let { if (it.size >= 2) it.last() - it.first() else 0L }
+        get() = durationMillis ?: (listOf(0) + segmentStarts.filter { it in 1 until times.size }.distinct().sorted() + times.size)
+            .zipWithNext { a, b -> times.subList(a, b).filterNotNull().let { if (it.size >= 2) it.last() - it.first() else 0L } }
+            .sum()
 }
 
 enum class LayerKind {

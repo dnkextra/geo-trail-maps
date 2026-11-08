@@ -67,7 +67,7 @@ fun screenAngle(proj: MapProjection, viewport: MapViewport, from: LatLon, to: La
 
 /** Banner while navigating: name, distance, bearing and an arrow pointing at the target on screen. */
 @Composable
-fun NavigationBanner(target: NavTarget, me: LatLon?, arrowAngle: Float?, units: Units, onStop: () -> Unit, modifier: Modifier = Modifier) {
+fun NavigationBanner(target: NavTarget, me: LatLon?, arrowAngle: Float?, units: Units, onStop: () -> Unit, modifier: Modifier = Modifier, locationOn: Boolean = true) {
     Surface(
         modifier = modifier.widthIn(max = 480.dp),
         shape = MaterialTheme.shapes.medium,
@@ -87,7 +87,9 @@ fun NavigationBanner(target: NavTarget, me: LatLon?, arrowAngle: Float?, units: 
             Spacer(Modifier.size(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(target.name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                val detail = if (me == null) {
+                val detail = if (!locationOn) {
+                    "Device location is off"
+                } else if (me == null) {
                     "Waiting for GPS…"
                 } else {
                     val d = Geodesy.distance(me, target.position)

@@ -53,14 +53,17 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
 
     /** See [MapEntry.seeThrough]; changes live while the slider moves, [saveSeeThrough] when it's let go. */
     var seeThrough by mutableFloatStateOf(entry.seeThrough)
-    fun saveSeeThrough() = library.setSeeThrough(entry.id, seeThrough)
+    fun saveSeeThrough() {
+        if (!library.setSeeThrough(entry.id, seeThrough)) seeThrough = library.get(entry.id)?.seeThrough ?: entry.seeThrough
+    }
 
     /** This map's background, see [MapEntry.basemap]: null until one is chosen for it. */
     var basemapChoice by mutableStateOf(entry.basemap)
         private set
-    fun setBasemap(source: BasemapSource?) {
-        basemapChoice = source?.name ?: NO_BASEMAP
-        library.setBasemap(entry.id, basemapChoice!!)
+    /** False (and nothing changes) if it couldn't be saved. */
+    fun setBasemap(source: BasemapSource?): Boolean {
+        val choice = source?.name ?: NO_BASEMAP
+        return library.setBasemap(entry.id, choice).also { if (it) basemapChoice = choice }
     }
     val basemap: BasemapSource? get() = BasemapSource.entries.firstOrNull { it.name == basemapChoice }
 
@@ -160,10 +163,10 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
     }
 
     /** Adds or replaces [feature]; the result completes with true once it's written to disk. */
-    fun upsert(feature: Feature): Deferred<Boolean> {
+    fun upsert(feature: Feature, notify: Boolean = true): Deferred<Boolean> {
         val i = features.indexOfFirst { it.id == feature.id }
         if (i >= 0) features[i] = feature else features.add(feature)
-        return save()
+        return save(notify)
     }
 
     fun delete(id: String) {
@@ -221,7 +224,7 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
 
     /** The lines used for trail distance; a new value only when they change. */
     val trailFeatures by derivedStateOf { Trails.features(layers, features) }
-    val trailLines by derivedStateOf { trailFeatures.map { it.points } }
+    val trailLines by derivedStateOf { trailFeatures.flatMap { it.segments } }
 
     /**
      * The layer of trails drawn in the app, or of lines picked from the map: created hidden the
@@ -357,7 +360,7 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
         save()
     }
 
-    private fun save() = library.saveFeatures(entry.id, MapFeatures(layers.toList(), features.toList()))
+    private fun save(notify: Boolean = true) = library.saveFeatures(entry.id, MapFeatures(layers.toList(), features.toList()), notify)
 
     override fun close() {
         renderer.close()
