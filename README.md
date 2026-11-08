@@ -52,6 +52,8 @@ Release APKs are attached to GitHub releases (`vX.Y.Z`). To cut one, bump `versi
 ```sh
 ./gradlew assembleRelease
 cp app/build/outputs/apk/release/app-release.apk geo-trail-maps-<version>.apk
+apksigner verify --print-certs geo-trail-maps-<version>.apk | grep SHA-256
+# must be 857b0ecd5204161181ca9d74a70e19175dee31e0057dbab6614523ae3bd8f13a
 zip -r geo-trail-maps-<version>-licenses.zip LICENSE THIRD_PARTY_NOTICES.md licenses/
 gh release create v<version> geo-trail-maps-<version>.apk geo-trail-maps-<version>-licenses.zip --title v<version> --notes "..."
 ```
@@ -71,12 +73,7 @@ That folder is backed up in Bitwarden as the secure note `geo-trail-maps — rel
 
 **Update that backup whenever the key or credentials change.** Android identifies an app by its signing key. If you lose the key, no future build can install over an existing one, and the only fix is to uninstall and reinstall, which deletes all imported maps and placemarks.
 
-If there's no key, the release build doesn't fail. It falls back to the debug key, and that APK won't update a release install (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). To check which key an APK was signed with:
-
-```sh
-apksigner verify --print-certs geo-trail-maps-<version>.apk
-# expect SHA-256 857b0ecd...3bd8f13a (CN=David), not CN=Android Debug
-```
+If the build can't find the key, `assembleRelease` fails at `preReleaseBuild`. An APK signed with any other key can't update an existing install (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), so check the certificate fingerprint above before publishing. Debug builds don't need the key.
 
 ## Code layout
 

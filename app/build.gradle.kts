@@ -5,8 +5,8 @@ plugins {
 
 // Release signing: {release.keystore, credentials.env}, looked for in the project root
 // first, then the canonical store at ~/sandbox/.signing/geo-trail-maps. Override with
-// -PgeoTrailMaps.signingDir=... or GEO_TRAIL_MAPS_SIGNING_DIR. Without a key the release
-// build falls back to the debug key: it runs, but won't install over a release build.
+// -PgeoTrailMaps.signingDir=... or GEO_TRAIL_MAPS_SIGNING_DIR. Without a key, release
+// builds fail rather than produce an APK that can't update an existing install.
 val signingDir: File = listOfNotNull(
     findProperty("geoTrailMaps.signingDir") as String?,
     System.getenv("GEO_TRAIL_MAPS_SIGNING_DIR"),
@@ -46,7 +46,7 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
@@ -58,6 +58,17 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+}
+
+// Fail release builds (not debug ones) when no release key was found.
+val hasReleaseKey = signingCreds.isNotEmpty()
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    doFirst {
+        if (!hasReleaseKey) throw GradleException(
+            "No release signing key: credentials.env not found via -PgeoTrailMaps.signingDir, " +
+                "GEO_TRAIL_MAPS_SIGNING_DIR, the project root or ~/sandbox/.signing/geo-trail-maps"
+        )
     }
 }
 
