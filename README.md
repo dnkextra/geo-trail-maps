@@ -9,10 +9,12 @@ Original project code, documentation, and artwork are available under the
 test maps, and online map services retain their own terms; see
 [Third-party notices](THIRD_PARTY_NOTICES.md).
 
-When distributing an APK, include `LICENSE`, `THIRD_PARTY_NOTICES.md`, and the
-`licenses/` directory in the accompanying distribution materials. Keep the
-on-map provider credits visible. Review the notices when changing dependencies
-or map providers.
+The APK bundles `LICENSE`, `THIRD_PARTY_NOTICES.md`, and the Apache License text,
+shown under Settings → Open-source licenses. When distributing an APK, also
+include them and the `licenses/` directory in the accompanying distribution
+materials. Keep the on-map provider credits visible. Review the notices when
+changing dependencies or map providers; release builds fail if a runtime
+dependency isn't covered (`./gradlew checkLegalNotices`).
 
 ## What it does
 

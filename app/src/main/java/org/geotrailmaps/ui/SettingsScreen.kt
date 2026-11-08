@@ -1,6 +1,7 @@
 package org.geotrailmaps.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -20,6 +21,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -33,6 +37,11 @@ import org.geotrailmaps.render.BasemapSource
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
+    var showLicenses by rememberSaveable { mutableStateOf(false) }
+    if (showLicenses) {
+        LicensesScreen(onBack = { showLicenses = false })
+        return
+    }
     BackHandler(onBack = onBack)
     val format by settings.coordinateFormat.collectAsState()
     val units by settings.units.collectAsState()
@@ -73,6 +82,11 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                     "map's More menu to export its features and its PDF.",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            ListItem(
+                headlineContent = { Text("Open-source licenses") },
+                supportingContent = { Text("License and notices for this app and its components") },
+                modifier = Modifier.clickable { showLicenses = true },
             )
         }
     }
