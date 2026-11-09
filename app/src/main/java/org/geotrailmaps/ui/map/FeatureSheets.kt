@@ -36,6 +36,9 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Hiking
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Public
+import org.geotrailmaps.data.LayerKind
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
@@ -44,6 +47,8 @@ import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.outlined.Pentagon
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -264,6 +269,8 @@ class FeatureListActions(
     val onLayerVisible: (FeatureLayer, Boolean) -> Unit,
     /** Turns trail distance on for a layer (for the lines in the given folders, or all) or off. */
     val onLayerTrails: (FeatureLayer, Boolean, Set<String>?) -> Unit,
+    /** Shows a layer on every map it overlaps, or only on this one. */
+    val onLayerGlobal: (FeatureLayer, Boolean) -> Unit,
     val onBasemap: (BasemapSource?) -> Unit,
     /** Called while the slider moves; [onSeeThroughDone] when it's let go. */
     val onSeeThrough: (Float) -> Unit,
@@ -423,7 +430,7 @@ fun FeatureListSheet(
                         },
                         supportingContent = {
                             Row(Modifier.alpha(if (layer.visible) 1f else 0.6f), verticalAlignment = Alignment.CenterVertically) {
-                                Text((if (layer.visible) "" else "Hidden · ") + (if (layer.trails) "Trails · " else "") + countText(items.size))
+                                Text((if (layer.visible) "" else "Hidden · ") + (if (layer.global) "On all maps · " else "") + (if (layer.trails) "Trails · " else "") + countText(items.size))
                                 Icon(if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore, null, Modifier.size(18.dp))
                             }
                         },
@@ -454,9 +461,37 @@ fun FeatureListSheet(
                                     }
                                 }
                                 SmallIconButton(Icons.Filled.CenterFocusStrong, "Show ${layer.name} on map") { actions.onShowLayer(layer) }
-                                SmallIconButton(Icons.Filled.DriveFileRenameOutline, "Rename ${layer.name}") { renaming = layer }
-                                SmallIconButton(Icons.Filled.Delete, "Delete ${layer.name}") {
-                                    deleting = "Delete \"${layer.name}\" and its ${countText(items.size)}? This can't be undone." to { actions.onDeleteLayer(layer) }
+                                // The rest in a menu, so the name keeps its room on narrow screens.
+                                Box {
+                                    var menu by remember { mutableStateOf(false) }
+                                    SmallIconButton(Icons.Filled.MoreVert, "More for ${layer.name}") { menu = true }
+                                    DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                                        // Only imported files: recorded tracks always stay on all maps (new recordings
+                                        // are saved there), and trail layers stay with their map.
+                                        if (layer.kind == LayerKind.IMPORTED) DropdownMenuItem(
+                                            text = { Text("Show on all maps") },
+                                            leadingIcon = { Icon(Icons.Filled.Public, null) },
+                                            trailingIcon = { if (layer.global) Icon(Icons.Filled.Check, null) },
+                                            modifier = Modifier.semantics { stateDescription = if (layer.global) "On" else "Off" },
+                                            onClick = { menu = false; actions.onLayerGlobal(layer, !layer.global) },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Rename") },
+                                            leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, null) },
+                                            onClick = { menu = false; renaming = layer },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Delete") },
+                                            leadingIcon = { Icon(Icons.Filled.Delete, null) },
+                                            onClick = {
+                                                menu = false
+                                                deleting = (
+                                                    if (layer.global) "Delete \"${layer.name}\" and everything in it from every map? This can't be undone."
+                                                    else "Delete \"${layer.name}\" and its ${countText(items.size)}? This can't be undone."
+                                                    ) to { actions.onDeleteLayer(layer) }
+                                            },
+                                        )
+                                    }
                                 }
                             }
                         },

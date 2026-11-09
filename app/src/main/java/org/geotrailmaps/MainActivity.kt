@@ -40,13 +40,14 @@ import org.geotrailmaps.render.BasemapTiles
 import org.geotrailmaps.track.TrackRecorder
 import org.geotrailmaps.ui.MapListScreen
 import org.geotrailmaps.ui.SettingsScreen
+import org.geotrailmaps.ui.TracksScreen
 import org.geotrailmaps.ui.map.MapScreen
 import org.geotrailmaps.ui.theme.AppTheme
 
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
-        TrackRecorder.init(this)
+        TrackRecorder.init(this, lazy { library })
     }
 
     val library by lazy { MapLibrary(this) }
@@ -127,9 +128,14 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
     }
 
     var openMapId by rememberSaveable { mutableStateOf<String?>(null) }
-    var lastMapId by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(openMapId) { openMapId?.let { lastMapId = it } }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showTracks by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        app.library.takeStartupNotice()?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+        if (TrackRecorder.takeRecoveredFlag()) {
+            Toast.makeText(context, "An unfinished track was recovered and paused. It's in Tracks.", Toast.LENGTH_LONG).show()
+        }
+    }
     var importing by remember { mutableStateOf(false) }
 
     /** Imports [uris] one by one. A single map opens; several stay in the list, with a summary. */
@@ -184,6 +190,7 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
         incoming.value = null
         openMapId = null
         showSettings = false
+        showTracks = false
         import(listOf(uri))
     }
 
@@ -195,6 +202,14 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
 
     when {
         showSettings -> SettingsScreen(app.settings, onBack = { showSettings = false })
+        showTracks -> TracksScreen(
+            library = app.library,
+            maps = maps,
+            units = units,
+            location = location,
+            onOpenMap = { showTracks = false; openMapId = it },
+            onBack = { showTracks = false },
+        )
         openEntry != null -> MapScreen(
             entry = openEntry,
             library = app.library,
@@ -216,9 +231,8 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
             snackbar = snackbar,
             onImport = { picker.launch(arrayOf("application/pdf", "application/octet-stream")) },
             onOpen = { openMapId = it },
-            // After a restart there's no last map: use the one a continued track came from, else any.
-            onRecordingClick = (listOfNotNull(lastMapId, TrackRecorder.state.value.continuingMapId).firstOrNull { id -> maps.any { it.id == id } } ?: maps.firstOrNull()?.id)
-                ?.let { id -> { openMapId = id } },
+            onTracks = { showTracks = true },
+            onlyOnMap = { app.library.onlyOnMap(it).size },
             onRename = app.library::rename,
             onDelete = app.library::delete,
             onSavePdf = { map ->

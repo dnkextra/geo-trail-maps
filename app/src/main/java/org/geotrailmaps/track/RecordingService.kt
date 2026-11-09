@@ -2,9 +2,7 @@ package org.geotrailmaps.track
 
 import android.annotation.SuppressLint
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -18,10 +16,6 @@ import android.location.LocationManager
 import android.location.LocationRequest
 import android.os.IBinder
 import android.os.SystemClock
-import org.geotrailmaps.MainActivity
-import org.geotrailmaps.R
-import org.geotrailmaps.data.Formats
-import org.geotrailmaps.data.Settings
 
 /**
  * Foreground service that keeps GPS running while a track records, including with the
@@ -31,14 +25,11 @@ class RecordingService : Service(), LocationListener {
     private val locationManager by lazy { getSystemService(LocationManager::class.java) }
     private val notifications by lazy { getSystemService(NotificationManager::class.java) }
     private var lastNotified = 0L
-    private val units by lazy { Settings(this).units.value }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        notifications.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Track recording", NotificationManager.IMPORTANCE_LOW),
-        )
+        recordingChannel()
         startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         if (!screenReceiverRegistered) {
             registerReceiver(screenReceiver, IntentFilter().apply {
@@ -118,25 +109,10 @@ class RecordingService : Service(), LocationListener {
         super.onDestroy()
     }
 
-    private fun notification(): Notification {
-        val s = TrackRecorder.state.value
-        val open = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification_track)
-            .setContentTitle("Recording track")
-            .setContentText(Formats.distance(s.distance, units) + " · " + Formats.duration(s.elapsedMillis()))
-            .setContentIntent(open)
-            .setOngoing(true)
-            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
-    }
+    private fun notification(): Notification =
+        trackNotification("Recording track", ongoing = true, RecordingActionReceiver.PAUSE, RecordingActionReceiver.STOP)
 
     private companion object {
-        const val CHANNEL = "recording"
         const val NOTIFICATION_ID = 1
         const val FLUSH_SCREEN_ON = 1
     }

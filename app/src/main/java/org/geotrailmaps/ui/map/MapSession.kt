@@ -4,7 +4,6 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Deferred
@@ -17,6 +16,8 @@ import org.geotrailmaps.data.MapEntry
 import org.geotrailmaps.data.MapLibrary
 import org.geotrailmaps.data.NO_BASEMAP
 import org.geotrailmaps.data.Trails
+import org.geotrailmaps.data.coverage
+import org.geotrailmaps.data.overlaps
 import org.geotrailmaps.data.FeatureType
 import org.geotrailmaps.render.BasemapSource
 import org.geotrailmaps.ui.theme.MapStyle
@@ -74,13 +75,51 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
      */
     @Volatile private var paperColors: Pair<Int, Int>? = null
 
-    val layers = mutableStateListOf<FeatureLayer>()
-    val features = mutableStateListOf<Feature>()
-    init {
-        val saved = library.loadFeatures(entry.id)
-        layers.addAll(saved.layers)
-        features.addAll(saved.features)
+    /** This map's own layers and features. */
+    private var local by mutableStateOf(library.loadFeatures(entry.id))
+    /** All the global layers; kept current by [followGlobal] while the map is open. */
+    private var global by mutableStateOf(library.global.value)
+    private val coverage = entry.coverage()
+
+    suspend fun followGlobal(): Nothing = library.global.collect { global = it }
+
+    /** The global layers and features that overlap this map. */
+    private val globalHere by derivedStateOf {
+        val shown = global.features.filter { overlaps(it, coverage) }
+        val ids = shown.mapNotNull { it.layerId }.toSet()
+        MapFeatures(global.layers.filter { it.id in ids }, shown)
     }
+
+    /** What's drawn on this map: the global layers overlapping it first, then its own. */
+    val layers: List<FeatureLayer> by derivedStateOf {
+        val g = globalHere.layers.map { it.copy(global = true, visible = it.id !in local.hiddenGlobal) }
+        // A layer half-way through moving between the two (the app was killed) is shown once.
+        val ids = global.layers.map { it.id }.toSet()
+        g + local.layers.filter { it.id !in ids }
+    }
+    val features: List<Feature> by derivedStateOf {
+        val ids = global.features.map { it.id }.toSet()
+        globalHere.features + local.features.filter { it.id !in ids }
+    }
+
+    // The library's copy, not [global]: that catches up a frame later (e.g. a track just saved).
+    private fun isGlobal(layerId: String?) = layerId != null && library.global.value.layers.any { it.id == layerId }
+    private fun isGlobalFeature(id: String) = library.global.value.features.any { it.id == id }
+
+    private fun changeLocal(notify: Boolean = true, change: (MapFeatures) -> MapFeatures): Deferred<Boolean> {
+        local = change(local)
+        return library.saveFeatures(entry.id, local, notify)
+    }
+
+    private fun changeGlobal(notify: Boolean = true, change: (MapFeatures) -> MapFeatures): Deferred<Boolean> =
+        library.updateGlobal(notify, change).also { global = library.global.value }
+
+    /** Changes the layer or feature list holding [global] items, or this map's. */
+    private fun change(global: Boolean, notify: Boolean = true, change: (MapFeatures) -> MapFeatures) =
+        if (global) changeGlobal(notify, change) else changeLocal(notify, change)
+
+    private fun MapFeatures.withFeature(id: String, edit: (Feature) -> Feature) = copy(features = features.map { if (it.id == id) edit(it) else it })
+    private fun MapFeatures.withLayer(id: String, edit: (FeatureLayer) -> FeatureLayer) = copy(layers = layers.map { if (it.id == id) edit(it) else it })
 
     /** Page positions of features, for fast drawing; null for maps without georeferencing. */
     val geometry = entry.geo?.let { g ->
@@ -163,63 +202,91 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
     }
 
     /** Adds or replaces [feature]; the result completes with true once it's written to disk. */
-    fun upsert(feature: Feature, notify: Boolean = true): Deferred<Boolean> {
-        val i = features.indexOfFirst { it.id == feature.id }
-        if (i >= 0) features[i] = feature else features.add(feature)
-        return save(notify)
-    }
+    fun upsert(feature: Feature, notify: Boolean = true): Deferred<Boolean> =
+        change(isGlobal(feature.layerId), notify) { d ->
+            if (d.features.any { it.id == feature.id }) d.withFeature(feature.id) { feature } else d.copy(features = d.features + feature)
+        }
 
     fun delete(id: String) {
-        features.removeAll { it.id == id }
         geometry?.forget(listOf(id))
-        save()
+        change(isGlobalFeature(id)) { d -> d.copy(features = d.features.filter { it.id != id }) }
     }
 
-    /** Adds an imported layer and its features. */
+    /** Adds an imported layer and its features, to this map. */
     fun addLayer(imported: MapFeatures) {
-        layers.addAll(imported.layers)
-        features.addAll(imported.features)
-        save()
+        changeLocal { d -> d.copy(layers = d.layers + imported.layers, features = d.features + imported.features) }
     }
 
     fun renameLayer(id: String, name: String) {
-        val i = layers.indexOfFirst { it.id == id }
-        if (i >= 0) layers[i] = layers[i].copy(name = name)
-        save()
+        change(isGlobal(id)) { d -> d.withLayer(id) { it.copy(name = name) } }
     }
 
+    /** A global layer is shown or hidden on this map only. */
     fun setLayerVisible(id: String, visible: Boolean) {
-        val i = layers.indexOfFirst { it.id == id }
-        if (i >= 0 && layers[i].visible != visible) {
-            layers[i] = layers[i].copy(visible = visible)
-            save()
-        }
+        if (layers.find { it.id == id }?.visible == visible) return
+        if (isGlobal(id)) changeLocal { d -> d.copy(hiddenGlobal = if (visible) d.hiddenGlobal - id else d.hiddenGlobal + id) }
+        else changeLocal { d -> d.withLayer(id) { it.copy(visible = visible) } }
     }
 
     fun setFeatureVisible(id: String, visible: Boolean) {
-        val i = features.indexOfFirst { it.id == id }
-        if (i >= 0 && features[i].visible != visible) {
-            features[i] = features[i].copy(visible = visible)
-            save()
-        }
+        if (features.find { it.id == id }?.visible == visible) return
+        change(isGlobalFeature(id)) { d -> d.withFeature(id) { it.copy(visible = visible) } }
     }
 
     /** Uses the layer's lines (only those in [folders], if given) for trail distance, or stops. */
     fun setLayerTrails(id: String, trails: Boolean, folders: Set<String>?) {
-        val i = layers.indexOfFirst { it.id == id }
-        if (i >= 0) {
-            layers[i] = layers[i].copy(trails = trails, trailFolders = folders.takeIf { trails })
-            save()
-        }
+        change(isGlobal(id)) { d -> d.withLayer(id) { it.copy(trails = trails, trailFolders = folders.takeIf { trails }) } }
     }
 
     /** Uses line [id] for trail distance by itself, or stops. */
     fun setFeatureTrail(id: String, trail: Boolean) {
-        val i = features.indexOfFirst { it.id == id }
-        if (i >= 0 && features[i].trail != trail) {
-            features[i] = features[i].copy(trail = trail)
-            save()
+        if (features.find { it.id == id }?.trail == trail) return
+        change(isGlobalFeature(id)) { d -> d.withFeature(id) { it.copy(trail = trail) } }
+    }
+
+    /**
+     * Moves a layer and everything in it to the global layers, so it shows on every map it
+     * overlaps, or back to this map only (taking its features beyond this map with it).
+     * It's removed from where it was only once it's written where it's going, so a failed write
+     * (e.g. storage full; the user is told) leaves it where it was, and dying in between leaves
+     * it in both (shown once, and tidied by the next move), never lost. False if it didn't move.
+     */
+    suspend fun setLayerGlobal(id: String, toGlobal: Boolean): Boolean {
+        // One move of a layer at a time: a second, the other way, would delete both copies.
+        if (!movingLayers.add(id)) return false
+        try {
+            return moveLayer(id, toGlobal)
+        } finally {
+            movingLayers.remove(id)
         }
+    }
+
+    private val movingLayers = mutableSetOf<String>()
+
+    private suspend fun moveLayer(id: String, toGlobal: Boolean): Boolean {
+        if (toGlobal == isGlobal(id)) return true
+        val from = if (toGlobal) local else library.global.value
+        val layer = from.layers.find { it.id == id } ?: return false
+        val moving = from.features.filter { it.layerId == id }
+        val ids = moving.map { it.id }.toSet()
+        // Replacing any copy left in the destination by an earlier, interrupted move.
+        fun MapFeatures.add(l: FeatureLayer) = copy(layers = layers.filter { it.id != id } + l, features = features.filter { it.id !in ids } + moving)
+        fun MapFeatures.remove() = copy(layers = layers.filter { it.id != id }, features = features.filter { it.layerId != id && it.id !in ids })
+        if (toGlobal) {
+            if (!changeGlobal { it.add(layer.copy(visible = true)) }.await()) {
+                changeGlobal(notify = false) { it.remove() }
+                return false
+            }
+            changeLocal { d -> d.remove().copy(hiddenGlobal = if (layer.visible) d.hiddenGlobal else d.hiddenGlobal + id) }
+        } else {
+            val hidden = id in local.hiddenGlobal
+            if (!changeLocal { d -> d.add(layer.copy(visible = !hidden)).copy(hiddenGlobal = d.hiddenGlobal - id) }.await()) {
+                changeLocal(notify = false) { d -> d.remove().copy(hiddenGlobal = if (hidden) d.hiddenGlobal + id else d.hiddenGlobal) }
+                return false
+            }
+            changeGlobal { it.remove() }
+        }
+        return true
     }
 
     /** The lines used for trail distance; a new value only when they change. */
@@ -232,50 +299,47 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
      * for trail distance whenever trails are added to it, including from [folders] if only
      * some of its folders were chosen before.
      */
-    private fun trailLayer(kind: LayerKind, folders: Set<String>): FeatureLayer {
-        val i = layers.indexOfFirst { it.kind == kind }
-        if (i >= 0) {
-            val l = layers[i]
-            return l.copy(trails = true, trailFolders = l.trailFolders?.plus(folders)).also { if (it != l) layers[i] = it }
+    private fun MapFeatures.withTrailLayer(kind: LayerKind, folders: Set<String>): Pair<MapFeatures, FeatureLayer> {
+        layers.find { it.kind == kind }?.let { l ->
+            val updated = l.copy(trails = true, trailFolders = l.trailFolders?.plus(folders))
+            return withLayer(l.id) { updated } to updated
         }
         val layer = when (kind) {
             LayerKind.DRAWN_TRAILS -> FeatureLayer(name = "My trails", color = MapStyle.trailLine.toArgb(), kind = kind, visible = false, trails = true)
             else -> FeatureLayer(name = "From the map", color = MapStyle.trailLine.toArgb(), kind = kind, visible = false, trails = true)
         }
-        layers.add(0, layer)
-        return layer
+        return copy(layers = listOf(layer) + layers) to layer
     }
 
-    val drawnTrailCount: Int get() = layers.find { it.kind == LayerKind.DRAWN_TRAILS }?.let { l -> features.count { it.layerId == l.id } } ?: 0
-
-    /** Saves a trail drawn in the app; returns it. */
-    fun addTrail(points: List<LatLon>): Feature {
-        val layer = trailLayer(LayerKind.DRAWN_TRAILS, setOf("")) // not in a folder
-        val f = Feature(type = FeatureType.LINE, name = "Trail ${drawnTrailCount + 1}", points = points, color = layer.color, layerId = layer.id)
-        features.add(f)
-        save()
-        return f
+    /** Saves a trail drawn in the app (kept with this map, like all trail layers). */
+    fun addTrail(points: List<LatLon>) {
+        changeLocal { d ->
+            val (data, layer) = d.withTrailLayer(LayerKind.DRAWN_TRAILS, setOf("")) // not in a folder
+            val n = data.features.count { it.layerId == layer.id } + 1
+            data.copy(features = data.features + Feature(type = FeatureType.LINE, name = "Trail $n", points = points, color = layer.color, layerId = layer.id))
+        }
     }
 
     /** Adds lines picked from the PDF as trails, each in a folder naming how it's drawn. */
     fun addMapLines(picked: List<MapLines.Line>) {
         val geo = entry.geo ?: return
         if (picked.isEmpty()) return
-        val layer = trailLayer(LayerKind.MAP_LINES, picked.map { MapLines.describe(it.style) }.toSet())
-        var n = features.count { it.layerId == layer.id }
-        features.addAll(
-            picked.map { line ->
-                Feature(
-                    type = FeatureType.LINE,
-                    name = "Map line ${++n}",
-                    points = line.points.map(geo::toLatLon),
-                    color = line.style.rgb or 0xFF000000.toInt(),
-                    layerId = layer.id,
-                    folder = MapLines.describe(line.style),
-                )
-            },
-        )
-        save()
+        changeLocal { d ->
+            val (data, layer) = d.withTrailLayer(LayerKind.MAP_LINES, picked.map { MapLines.describe(it.style) }.toSet())
+            var n = data.features.count { it.layerId == layer.id }
+            data.copy(
+                features = data.features + picked.map { line ->
+                    Feature(
+                        type = FeatureType.LINE,
+                        name = "Map line ${++n}",
+                        points = line.points.map(geo::toLatLon),
+                        color = line.style.rgb or 0xFF000000.toInt(),
+                        layerId = layer.id,
+                        folder = MapLines.describe(line.style),
+                    )
+                },
+            )
+        }
     }
 
     /** The lines already picked from the map: page positions of their ends, and their sizes. */
@@ -344,23 +408,11 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
             else features.filter { it.visible && it.layerId !in hidden }
         }
 
-    /** The layer recorded tracks go into, created the first time a track is saved. */
-    fun tracksLayer(color: Int): FeatureLayer =
-        layers.firstOrNull { it.kind == LayerKind.TRACKS }
-            ?: FeatureLayer(name = "Tracks", color = color, kind = LayerKind.TRACKS).also {
-                layers.add(0, it)
-                save()
-            }
-
-    /** Removes a layer together with everything imported in it. */
+    /** Removes a layer together with everything imported in it; a global one from every map. */
     fun deleteLayer(id: String) {
-        layers.removeAll { it.id == id }
         geometry?.forget(features.filter { it.layerId == id }.map { it.id })
-        features.removeAll { it.layerId == id }
-        save()
+        change(isGlobal(id)) { d -> d.copy(layers = d.layers.filter { it.id != id }, features = d.features.filter { it.layerId != id }) }
     }
-
-    private fun save(notify: Boolean = true) = library.saveFeatures(entry.id, MapFeatures(layers.toList(), features.toList()), notify)
 
     override fun close() {
         renderer.close()

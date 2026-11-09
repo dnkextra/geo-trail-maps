@@ -3,6 +3,7 @@ package org.geotrailmaps.ui.map
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.text.format.DateUtils
 import androidx.compose.animation.core.animate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Explore
@@ -169,6 +170,10 @@ import org.geotrailmaps.data.MapEntry
 import org.geotrailmaps.data.MapLibrary
 import org.geotrailmaps.data.Settings
 import org.geotrailmaps.data.Units
+import org.geotrailmaps.ui.shareFeatures
+import org.geotrailmaps.data.LatLonBox
+import org.geotrailmaps.data.coverage
+import org.geotrailmaps.data.overlaps
 import org.geotrailmaps.geo.GeoReference
 import org.geotrailmaps.geo.Geodesy
 import org.geotrailmaps.geo.LatLon
@@ -287,8 +292,32 @@ private fun MapContent(
     var searchPoint by remember { mutableStateOf<LatLon?>(null) }
     val recording by TrackRecorder.state.collectAsState()
     var showStopTrack by remember { mutableStateOf(false) }
+    /** Track pressed while a track paused on another map is unfinished: save or discard it first. */
+    var askingUnfinished by remember { mutableStateOf(false) }
+    /** Resume pressed this far (m) from where the track was paused: asked first. */
+    var resumingFar by remember { mutableStateOf<Double?>(null) }
     /** A save waiting for the last batched fixes: Stop/Save mustn't run twice. */
     var savingTrack by remember { mutableStateOf(false) }
+    val coverage = remember(entry) { entry.coverage() }
+    LaunchedEffect(recording.status) {
+        when (recording.status) {
+            // A paused track keeps its controls on maps it recorded on, even with no points there.
+            TrackRecorder.Status.RECORDING -> TrackRecorder.recordedOn += entry.id
+            TrackRecorder.Status.IDLE -> { showStopTrack = false; askingUnfinished = false; resumingFar = null } // stopped from the notification
+            TrackRecorder.Status.PAUSED -> {}
+        }
+    }
+    /**
+     * Recording shows on every map while it runs, but a paused track only on maps it's on:
+     * elsewhere it stays out of the way until Track is pressed (see [askingUnfinished]).
+     */
+    val recordingHere = recording.status == TrackRecorder.Status.RECORDING ||
+        recording.status == TrackRecorder.Status.PAUSED && (entry.id in TrackRecorder.recordedOn || remember(recording.points, coverage) {
+            // By segment, so a map between two (e.g. under a flight) doesn't count.
+            overlaps(Feature(type = FeatureType.LINE, name = "", points = recording.points, color = 0, track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts)), coverage)
+        })
+    /** A global layer about to come back to this map only: confirmed first, as other maps lose it. */
+    var localizing by remember { mutableStateOf<FeatureLayer?>(null) }
     /** Navigate: tapping points to measure the way between them, along trails or straight. */
     var navigating by remember { mutableStateOf(false) }
     /** Bars hidden so the map fills the screen; a tap on empty map toggles it. */
@@ -367,6 +396,7 @@ private fun MapContent(
     val horizontalSafeArea = barsAndCutout.only(WindowInsetsSides.Horizontal)
 
     LaunchedEffect(session) { session.renderBase() }
+    LaunchedEffect(session) { session.followGlobal() }
     LaunchedEffect(session) { session.renderTiles() }
     // Built ahead once the map shows, so measuring along trails is ready when it's first used.
     LaunchedEffect(session, session.trailLines) {
@@ -432,10 +462,6 @@ private fun MapContent(
         snackbar.showSnackbar(text, duration = duration)
     }
 
-    LaunchedEffect(Unit) {
-        if (TrackRecorder.takeRecoveredFlag()) showMessage("An unfinished track was recovered. Resume or stop it below.")
-    }
-
     // Once per map opened: without a connection, only background areas viewed before can show.
     val basemapOffline = basemapOn && basemap.offline
     var toldOffline by remember { mutableStateOf(false) }
@@ -473,62 +499,51 @@ private fun MapContent(
         else showMessage("Recording a track, but device location is off. Turn it on to record points.", SnackbarDuration.Long)
     }
 
+    /** Saves the recording (see [TrackRecorder.stop]) and opens it, if it's on this map. */
     fun saveTrack() {
-        val track = TrackRecorder.finish(context.applicationContext)
+        val saved = TrackRecorder.stop(context.applicationContext)
         session.geometry?.forget(listOf(RECORDING_ID))
-        if (track.points.size < 2) {
-            TrackRecorder.clearLog()
-            return run { showMessage("The track was too short to save.") }
-        }
-        val data = TrackData(track.times, track.elevations, track.elapsedMillis(), track.ascent, track.segmentStarts)
-        // Continuing a saved track updates it; otherwise it's a new track in the Tracks layer.
-        val continued = track.continuingId?.let { id -> session.features.find { it.id == id } }
-        // Continued from a track on another map: update it there, not here.
-        val otherMapId = track.continuingMapId?.takeIf { it != entry.id }
-        if (continued == null && track.continuingId != null && otherMapId != null) {
-            val saved = session.library.loadFeatures(otherMapId)
-            val original = saved.features.find { it.id == track.continuingId }
-            if (original != null) {
-                val updated = original.copy(points = track.points, track = data, visible = true)
-                val job = session.library.saveFeatures(
-                    otherMapId,
-                    saved.copy(
-                        layers = saved.layers.map { if (it.id == updated.layerId) it.copy(visible = true) else it },
-                        features = saved.features.map { if (it.id == updated.id) updated else it },
-                    ),
-                    notify = false, // the recorder explains a failure
-                )
-                TrackRecorder.clearLogAfter(job, context, track, updated.id, otherMapId)
-                val mapName = allMaps.find { it.id == otherMapId }?.name ?: "the other map"
-                scope.launch { if (job.await()) showMessage("Saved \"${original.name}\" on \"$mapName\", where it was started.") }
-                return
-            }
-        }
-        val f = continued?.copy(points = track.points, track = data, visible = true) ?: Feature(
-            type = FeatureType.LINE,
-            name = "Track " + SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(track.startedAt)),
-            points = track.points,
-            color = MapStyle.recordingTrack.toArgb(),
-            layerId = session.tracksLayer(MapStyle.recordingTrack.toArgb()).id,
-            track = data,
-        )
-        if (track.continuingId != null && continued == null) {
-            showMessage("The track you continued isn't on this map, so this was saved as a new track.")
-        }
-        f.layerId?.let { session.setLayerVisible(it, true) }
-        // Keep the recovery log until the track is safely on disk.
-        TrackRecorder.clearLogAfter(session.upsert(f, notify = false), context, track, f.id, entry.id)
-        selectedId = f.id
-        editingId = f.id
+        if (saved == null) return run { showMessage("The track was too short to save.") }
+        if (!overlaps(saved, coverage)) return run { showMessage("Saved \"${saved.name}\" in Tracks.") }
+        saved.layerId?.let { session.setLayerVisible(it, true) }
+        selectedId = saved.id
+        editingId = saved.id
     }
 
+    /** Records more onto [f]. Its layer becomes global if it isn't, since recordings are saved there. */
     fun continueTrack(f: Feature) {
+        val layer = session.layers.find { it.id == f.layerId } ?: return
         if (!hasPreciseLocation()) return askForPreciseLocation()
         if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        if (!TrackRecorder.start(context.applicationContext, from = f, mapId = entry.id)) return run { showMessage("Still saving the last track. Try again in a moment.") }
-        showMessage("Continuing \"${f.name}\". Stop saves it into the same track.")
+        if (!TrackRecorder.start(context.applicationContext, from = f)) return run { showMessage("Still saving the last track. Try again in a moment.") }
+        if (layer.global) return run { showMessage("Continuing \"${f.name}\". Stop saves it into the same track.") }
+        scope.launch {
+            // If the layer can't move (the library says why), Stop saves a new track in Tracks instead.
+            if (session.setLayerGlobal(layer.id, true)) {
+                showMessage("Continuing \"${f.name}\". \"${layer.name}\" now shows on every map it covers, so the track can keep growing.", SnackbarDuration.Long)
+            }
+        }
+    }
+
+    /** Saves the paused track, then starts a new one here. */
+    fun saveAndRecordNew() {
+        if (savingTrack) return
+        savingTrack = true
+        scope.launch {
+            try {
+                val saved = TrackRecorder.stop(context.applicationContext)
+                TrackRecorder.awaitSaved()
+                // A failed save comes back paused (the recorder says so): don't replace it.
+                if (TrackRecorder.state.value.status == TrackRecorder.Status.IDLE) {
+                    startRecording()
+                    if (saved != null) showMessage("Saved \"${saved.name}\" in Tracks. Recording a new track.")
+                }
+            } finally {
+                savingTrack = false
+            }
+        }
     }
 
     fun addPlacemark(at: LatLon) {
@@ -1041,7 +1056,7 @@ private fun MapContent(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     // With the bars hidden, a small chip keeps recording visible.
-                    if (chromeHidden && recording.status != TrackRecorder.Status.IDLE) RecordingChip(recording, units)
+                    if (chromeHidden && recordingHere) RecordingChip(recording, units)
                     if (geo != null) ScaleBar(geo, viewport, units)
                 }
                 Spacer(Modifier.weight(1f))
@@ -1091,7 +1106,7 @@ private fun MapContent(
             ) {
                 Column(Modifier.windowInsetsPadding(barsAndCutout.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))) {
                     // In every mode, so switching modes never changes the panel's height.
-                    if (recording.status != TrackRecorder.Status.IDLE) {
+                    if (recordingHere) {
                         RecordingBar(
                             state = recording,
                             units = units,
@@ -1104,7 +1119,7 @@ private fun MapContent(
                                     }
                                 }
                                 else if (!hasPreciseLocation()) askForPreciseLocation()
-                                else TrackRecorder.resume(context.applicationContext)
+                                else resumeGap(recording, location)?.let { resumingFar = it } ?: TrackRecorder.resume(context.applicationContext)
                             },
                             onStop = { if (!savingTrack) showStopTrack = true },
                         )
@@ -1246,9 +1261,13 @@ private fun MapContent(
                                 startTool()
                                 navigating = true
                             }
-                            val idle = recording.status == TrackRecorder.Status.IDLE
-                            ToolbarButton(if (idle) Icons.Filled.FiberManualRecord else Icons.Filled.Stop, if (idle) "Track" else "Stop track", enabled = geo != null) {
-                                if (idle) startRecording() else if (!savingTrack) showStopTrack = true
+                            // Works on maps without location information too: the track is kept in Tracks.
+                            ToolbarButton(if (recordingHere) Icons.Filled.Stop else Icons.Filled.FiberManualRecord, if (recordingHere) "Stop track" else "Track") {
+                                when {
+                                    recordingHere -> if (!savingTrack) showStopTrack = true
+                                    recording.status == TrackRecorder.Status.IDLE -> startRecording()
+                                    else -> askingUnfinished = true
+                                }
                             }
                             ToolbarButton(Icons.Filled.Layers, "Layers", badge = session.shownFeatures.size) { showList = true }
                         }
@@ -1269,7 +1288,7 @@ private fun MapContent(
             format = format,
             layerName = session.layers.find { it.id == f.layerId }?.name,
             // Tracks (recorded, or imported with times) can be extended by recording more.
-            onContinueTrack = if (f.type == FeatureType.LINE && recording.status == TrackRecorder.Status.IDLE &&
+            onContinueTrack = if (f.type == FeatureType.LINE && f.layerId != null && recording.status == TrackRecorder.Status.IDLE &&
                 (f.track != null || session.layers.find { it.id == f.layerId }?.kind == LayerKind.TRACKS)
             ) ({ continueTrack(f) }) else null,
             trailByLayer = Trails.byLayer(f, session.layers.find { it.id == f.layerId }),
@@ -1346,6 +1365,21 @@ private fun MapContent(
                     session.deleteLayer(layer.id)
                 },
                 onLayerTrails = { layer, on, folders -> session.setLayerTrails(layer.id, on, folders) },
+                onLayerGlobal = { layer, on ->
+                    val global = session.library.global.value
+                    val recordingInto = global.features.find { it.id == recording.continuingId }?.layerId == layer.id
+                    when {
+                        // It would vanish from this map's list, so it couldn't be changed back here.
+                        on && session.features.none { it.layerId == layer.id && overlaps(it, coverage) } ->
+                            showMessage("Nothing in \"${layer.name}\" is on this map, so it can't be shown on all maps from here.")
+                        on -> scope.launch {
+                            if (session.setLayerGlobal(layer.id, true)) showMessage("\"${layer.name}\" now shows on every map it covers.")
+                        }
+                        recordingInto -> showMessage("A track in \"${layer.name}\" is being recorded. Stop it first.")
+                        // Other maps may show it too, so this always asks.
+                        else -> localizing = layer
+                    }
+                },
                 onLayerVisible = { layer, visible ->
                     if (!visible && session.features.any { it.layerId == layer.id && it.id == selectedId }) selectedId = null
                     session.setLayerVisible(layer.id, visible)
@@ -1391,6 +1425,64 @@ private fun MapContent(
                 showMessage("Track discarded.")
             },
             onDismiss = { showStopTrack = false },
+        )
+    }
+
+    localizing?.let { layer ->
+        AlertDialog(
+            onDismissRequest = { localizing = null },
+            title = { Text("Show only on this map?") },
+            text = { Text("All of \"${layer.name}\" will move to this map, and stop showing on other maps and in Tracks.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    localizing = null
+                    scope.launch {
+                        if (session.setLayerGlobal(layer.id, false)) showMessage("\"${layer.name}\" now shows only on this map.")
+                    }
+                }) { Text("Move here") }
+            },
+            dismissButton = { TextButton(onClick = { localizing = null }) { Text("Cancel") } },
+        )
+    }
+
+    resumingFar?.let { distance ->
+        ResumeGapDialog(
+            distance = distance,
+            units = units,
+            saveLabel = "Save, record new",
+            onResume = { resumingFar = null; TrackRecorder.resume(context.applicationContext) },
+            onSave = { resumingFar = null; saveAndRecordNew() },
+            onDismiss = { resumingFar = null },
+        )
+    }
+
+    if (askingUnfinished) {
+        val paused = recording
+        AlertDialog(
+            onDismissRequest = { askingUnfinished = false },
+            title = { Text("Unfinished track") },
+            text = {
+                Text(
+                    "A track (${Formats.distance(paused.distance, units)}) was paused " +
+                        DateUtils.getRelativeTimeSpanString(paused.pausedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS) +
+                        ". Save or discard it to start a new one here. To carry on with it instead, resume it in Tracks.",
+                )
+            },
+            confirmButton = {
+                FlowRow(horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { askingUnfinished = false }) { Text("Cancel") }
+                    TextButton(onClick = {
+                        askingUnfinished = false
+                        TrackRecorder.finish(context.applicationContext)
+                        TrackRecorder.clearLog()
+                        startRecording()
+                    }) { Text("Discard, record new") }
+                    TextButton(onClick = {
+                        askingUnfinished = false
+                        saveAndRecordNew()
+                    }) { Text("Save, record new") }
+                }
+            },
         )
     }
 
@@ -1879,29 +1971,6 @@ private fun MapInfoDialog(entry: MapEntry, me: LatLon?, format: CoordinateFormat
             }
         },
     )
-}
-
-/** Writes the features to a file in the background, then offers to share it; false if writing failed. */
-private suspend fun shareFeatures(context: Context, mapName: String, features: List<Feature>, layers: List<FeatureLayer>, kml: Boolean): Boolean {
-    val file = withContext(Dispatchers.IO) {
-        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-        val safeName = mapName.replace(Regex("[^A-Za-z0-9._ -]"), "_").ifBlank { "features" }
-        val file = File(dir, "$safeName.${if (kml) "kml" else "gpx"}")
-        try {
-            file.writeText(if (kml) FeatureExport.kml(mapName, features, layers) else FeatureExport.gpx(mapName, features))
-            file
-        } catch (e: IOException) {
-            file.delete()
-            null
-        }
-    } ?: return false
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-    val send = Intent(Intent.ACTION_SEND)
-        .setType(if (kml) "application/vnd.google-earth.kml+xml" else "application/gpx+xml")
-        .putExtra(Intent.EXTRA_STREAM, uri)
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    context.startActivity(Intent.createChooser(send, "Export features"))
-    return true
 }
 
 private const val MAX_IMPORT_BYTES = 50 * 1024 * 1024

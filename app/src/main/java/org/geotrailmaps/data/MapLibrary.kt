@@ -91,6 +91,7 @@ internal fun copyPdf(input: InputStream, out: OutputStream, displayName: String,
 /**
  * Stores imported maps in app storage, one folder per map:
  * maps/<id>/map.pdf, meta.json, thumb.png, features.json
+ * and the global layers, shown on every map they overlap, in global-features.json.
  */
 class MapLibrary(private val context: Context) {
     private val root = File(context.filesDir, "maps").apply { mkdirs() }
@@ -223,20 +224,60 @@ class MapLibrary(private val context: Context) {
     private val writeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
     fun loadFeatures(id: String): MapFeatures = features.getOrPut(id) {
-        val file = featuresFile(id)
-        if (!file.exists()) return@getOrPut MapFeatures()
-        try {
+        readFeatures(featuresFile(id), "This map's points, lines and tracks couldn't be read, so it opened without them.")
+    }
+
+    private fun readFeatures(file: File, damagedMessage: String, report: (String) -> Unit = { _messages.tryEmit(it) }): MapFeatures {
+        if (!file.exists()) return MapFeatures()
+        return try {
             parseFeatures(file.readText())
         } catch (e: Exception) { // unreadable, JSONException, or a bad enum name
             // Damaged (e.g. by a storage fault): keep it aside, so a later save can't overwrite it,
-            // and open the map without features rather than not at all.
+            // and carry on without it rather than not at all.
             val kept = file.renameTo(File(file.path + ".damaged-" + System.currentTimeMillis()))
-            _messages.tryEmit(
-                "This map's points, lines and tracks couldn't be read, so it opened without them." +
-                    if (kept) " The damaged data was kept in the app's storage." else "",
-            )
+            report(damagedMessage + if (kept) " The damaged data was kept in the app's storage." else "")
             MapFeatures()
         }
+    }
+
+    /**
+     * Set if the global layers couldn't be read at startup: [messages] has no one listening
+     * yet then, so the app shows this once it's up (see [takeStartupNotice]).
+     */
+    private var startupNotice: String? = null
+
+    fun takeStartupNotice(): String? = startupNotice.also { startupNotice = null }
+
+    private val globalFile = File(context.filesDir, "global-features.json")
+    private val _global = MutableStateFlow(
+        readFeatures(globalFile, "Your recorded tracks and layers shown on all maps couldn't be read.") { startupNotice = it },
+    )
+
+    /**
+     * Layers kept apart from any one map: recorded tracks, and layers chosen to show on all
+     * maps. Each map shows the features that overlap it.
+     */
+    val global: StateFlow<MapFeatures> = _global
+
+    /**
+     * Changes the global layers now and writes them in the background; completes with true
+     * once written. Main thread only.
+     */
+    fun updateGlobal(notify: Boolean = true, change: (MapFeatures) -> MapFeatures): Deferred<Boolean> {
+        val data = change(_global.value)
+        _global.value = data
+        return writeScope.async {
+            writeFeatures(globalFile, data).also {
+                if (!it && notify) _messages.tryEmit("Couldn't save your tracks. Storage may be full.")
+            }
+        }
+    }
+
+    /** Global features no other georeferenced map shows, which deleting map [id] would leave on no map. */
+    fun onlyOnMap(id: String): List<Feature> {
+        val here = get(id)?.coverage() ?: return emptyList()
+        val others = _maps.value.filter { it.id != id }.mapNotNull { it.coverage() }
+        return _global.value.features.filter { f -> overlaps(f, here) && others.none { overlaps(f, it) } }
     }
 
     private fun parseFeatures(text: String): MapFeatures {
@@ -248,9 +289,11 @@ class MapLibrary(private val context: Context) {
         val o = JSONObject(text)
         val layers = o.getJSONArray("layers")
         val list = o.getJSONArray("features")
+        val hidden = o.optJSONArray("hiddenGlobal")
         return MapFeatures(
             layers = List(layers.length()) { layerFromJson(layers.getJSONObject(it)) },
             features = List(list.length()) { featureFromJson(list.getJSONObject(it)) },
+            hiddenGlobal = hidden?.let { a -> List(a.length()) { a.getString(it) }.toSet() }.orEmpty(),
         )
     }
 
@@ -260,20 +303,24 @@ class MapLibrary(private val context: Context) {
         features[id] = data
         return writeScope.async {
             if (!File(root, id).exists()) return@async false // map was deleted
-            try {
-                val json = JSONObject()
-                    .put("layers", JSONArray().apply { data.layers.forEach { put(layerToJson(it)) } })
-                    .put("features", JSONArray().apply { data.features.forEach { put(featureToJson(it)) } })
-                val tmp = File(featuresFile(id).path + ".tmp")
-                tmp.writeText(json.toString())
-                if (!tmp.renameTo(featuresFile(id))) throw IOException("rename failed")
-                true
-            } catch (e: IOException) {
-                // E.g. storage full. The in-memory copy is kept, and the next save writes it all.
-                if (notify) _messages.tryEmit("Couldn't save your changes to this map. Storage may be full.")
-                false
+            writeFeatures(featuresFile(id), data).also {
+                if (!it && notify) _messages.tryEmit("Couldn't save your changes to this map. Storage may be full.")
             }
         }
+    }
+
+    /** False if it couldn't be written (e.g. storage full); the in-memory copy is kept, and the next save writes it all. */
+    private fun writeFeatures(file: File, data: MapFeatures): Boolean = try {
+        val json = JSONObject()
+            .put("layers", JSONArray().apply { data.layers.forEach { put(layerToJson(it)) } })
+            .put("features", JSONArray().apply { data.features.forEach { put(featureToJson(it)) } })
+            .apply { if (data.hiddenGlobal.isNotEmpty()) put("hiddenGlobal", JSONArray(data.hiddenGlobal.toList())) }
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(json.toString())
+        if (!tmp.renameTo(file)) throw IOException("rename failed")
+        true
+    } catch (e: IOException) {
+        false
     }
 
     // ---------------------------------------------------------------- persistence

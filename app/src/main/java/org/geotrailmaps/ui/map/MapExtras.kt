@@ -47,6 +47,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import android.location.Location
+import android.os.SystemClock
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import org.geotrailmaps.data.Formats
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.geo.Geodesy
@@ -166,6 +170,42 @@ fun RecordingBar(state: TrackRecorder.State, units: Units, onPauseResume: () -> 
     }
 }
 
+/** Resuming this far from where the track was paused asks first (see [resumeGap]). */
+private const val RESUME_GAP_M = 1_000.0
+
+/**
+ * How far [fix] is from where the paused [state] ends, if that's further than [RESUME_GAP_M];
+ * null to resume without asking (also without a fix from the last two minutes).
+ */
+fun resumeGap(state: TrackRecorder.State, fix: Location?): Double? {
+    val end = state.points.lastOrNull() ?: return null
+    if (fix == null || SystemClock.elapsedRealtimeNanos() - fix.elapsedRealtimeNanos > 120_000_000_000L) return null
+    return Geodesy.distance(end, LatLon(fix.latitude, fix.longitude)).takeIf { it > RESUME_GAP_M }
+}
+
+/** Resuming far from where the track was paused: carry on with a gap, or save it ([saveLabel]). */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ResumeGapDialog(distance: Double, units: Units, saveLabel: String, onResume: () -> Unit, onSave: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Resume this track?") },
+        text = {
+            Text(
+                "You're ${Formats.distance(distance, units)} from where it was paused. Resuming carries on the same " +
+                    "track, without a line or distance for the gap. Or save it as it is.",
+            )
+        },
+        confirmButton = {
+            FlowRow(horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                TextButton(onClick = onSave) { Text(saveLabel) }
+                TextButton(onClick = onResume) { Text("Resume") }
+            }
+        },
+    )
+}
+
 @Composable
 fun StopTrackDialog(state: TrackRecorder.State, units: Units, onSave: () -> Unit, onDiscard: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
@@ -177,7 +217,7 @@ fun StopTrackDialog(state: TrackRecorder.State, units: Units, onSave: () -> Unit
                     "Too short to save yet. Keep recording, or discard it."
                 } else {
                     "${Formats.distance(state.distance, units)} in ${Formats.duration(state.elapsedMillis())}. " +
-                        "Save it to the Tracks layer, or discard it."
+                        "Save it in Tracks, or discard it."
                 },
             )
         },

@@ -95,7 +95,19 @@ data class FeatureLayer(
     val trails: Boolean = false,
     /** With [trails]: only lines in these [Feature.folder]s count; null = all its lines. */
     val trailFolders: Set<String>? = null,
+    /**
+     * Shown on every map it overlaps, not kept with one map (see [MapLibrary.global]). Not
+     * stored: it's set from where the layer is kept when a map's layers are put together.
+     */
+    val global: Boolean = false,
 )
 
-/** Everything drawn on one map. */
-data class MapFeatures(val layers: List<FeatureLayer> = emptyList(), val features: List<Feature> = emptyList())
+/**
+ * Everything drawn on one map, or the global layers (see [MapLibrary.global]).
+ * [hiddenGlobal]: on a map, the global layers hidden there.
+ */
+data class MapFeatures(
+    val layers: List<FeatureLayer> = emptyList(),
+    val features: List<Feature> = emptyList(),
+    val hiddenGlobal: Set<String> = emptySet(),
+)

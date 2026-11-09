@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -101,14 +102,17 @@ fun MapListScreen(
     sort: MapSort,
     onSortChange: (MapSort) -> Unit,
     onSettings: () -> Unit,
-    /** Opens a map to manage the recording from (the last one viewed); null when there isn't one. */
-    onRecordingClick: (() -> Unit)? = null,
+    /** Opens Tracks: the recording, and recorded tracks whatever map they're on. */
+    onTracks: () -> Unit,
+    /** Global features that only map [id] shows, so deleting it leaves them on no map. */
+    onlyOnMap: (String) -> Int,
 ) {
     var renaming by remember { mutableStateOf<MapEntry?>(null) }
     var deleting by remember { mutableStateOf<MapEntry?>(null) }
     var moving by remember { mutableStateOf<MapEntry?>(null) }
     var sortMenu by remember { mutableStateOf(false) }
-    val recordingStatus = TrackRecorder.state.collectAsState().value.status
+    val recording = TrackRecorder.state.collectAsState().value
+    val recordingStatus = recording.status
     val recordingActive = recordingStatus != TrackRecorder.Status.IDLE
     var collapsed by rememberSaveable { mutableStateOf(setOf<String>()) }
     // Archived maps start hidden; the section is opened by tapping its header.
@@ -149,6 +153,7 @@ fun MapListScreen(
                                 }
                             }
                         }
+                        IconButton(onClick = onTracks) { Icon(Icons.Filled.Timeline, "Tracks") }
                         IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Settings") }
                     },
                 )
@@ -165,8 +170,11 @@ fun MapListScreen(
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         if (maps.isEmpty()) {
+            Column(Modifier.fillMaxSize().padding(padding)) {
+            // The recording shows here too: it doesn't need a map.
+            if (recordingActive) RecordingRow(recording, units, onTracks)
             Column(
-                Modifier.fillMaxSize().padding(padding).padding(32.dp),
+                Modifier.fillMaxWidth().weight(1f).padding(32.dp),
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -178,6 +186,7 @@ fun MapListScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 8.dp),
                 )
+            }
             }
         } else {
             // Rows scroll behind the nav bar; extra bottom space clears the import button.
@@ -205,22 +214,7 @@ fun MapListScreen(
                     )
                     HorizontalDivider()
                 }
-                if (recordingActive) {
-                    item(key = "recording") {
-                        ListItem(
-                            headlineContent = { Text(if (recordingStatus == TrackRecorder.Status.RECORDING) "Recording a track" else "Track paused, not recording") },
-                            supportingContent = {
-                                Text(
-                                    if (recordingStatus == TrackRecorder.Status.RECORDING) "Open a map to see it, pause or stop."
-                                    else "Open a map to see it, resume or stop and save it.",
-                                )
-                            },
-                            leadingContent = { Icon(Icons.Filled.FiberManualRecord, null, tint = MapStyle.recordingTrack) },
-                            modifier = if (onRecordingClick != null) Modifier.clickable(onClickLabel = "Open map", onClick = onRecordingClick) else Modifier,
-                        )
-                        HorizontalDivider()
-                    }
-                }
+                if (recordingActive) item(key = "recording") { RecordingRow(recording, units, onTracks) }
                 items(sorted.filter { !it.archived && it.folder == null }, key = { it.id }) { row(it) }
                 for (folder in folders) {
                     val inFolder = sorted.filter { !it.archived && it.folder == folder }
@@ -309,10 +303,19 @@ fun MapListScreen(
     }
 
     deleting?.let { map ->
+        val orphans = remember(map.id) { onlyOnMap(map.id) }
         AlertDialog(
             onDismissRequest = { deleting = null },
             title = { Text("Delete map?") },
-            text = { Text("\"${map.name}\" and its placemarks will be removed from this device.") },
+            text = {
+                Text(
+                    "\"${map.name}\" and its placemarks will be removed from this device." + when (orphans) {
+                        0 -> ""
+                        1 -> " 1 item from Tracks is only on this map. It will stay in Tracks."
+                        else -> " $orphans items from Tracks are only on this map. They'll stay in Tracks."
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = { onDelete(map.id); deleting = null },
@@ -321,6 +324,23 @@ fun MapListScreen(
             },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
         )
+    }
+}
+
+/** The recording, paused or not; tapping it opens Tracks, where it can be paused, resumed or stopped. */
+@Composable
+private fun RecordingRow(state: TrackRecorder.State, units: Units, onClick: () -> Unit) {
+    val recording = state.status == TrackRecorder.Status.RECORDING
+    Column {
+        ListItem(
+            headlineContent = { Text(if (recording) "Recording a track" else "Track paused, not recording") },
+            supportingContent = { Text(Formats.distance(state.distance, units) + " · Tap to pause, resume or stop") },
+            leadingContent = {
+                Icon(Icons.Filled.FiberManualRecord, null, tint = if (recording) MapStyle.recordingTrack else MaterialTheme.colorScheme.outline)
+            },
+            modifier = Modifier.clickable(onClickLabel = "Open Tracks", onClick = onClick),
+        )
+        HorizontalDivider()
     }
 }
 

@@ -13,7 +13,17 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import androidx.compose.ui.graphics.toArgb
 import org.geotrailmaps.data.Feature
+import org.geotrailmaps.data.FeatureLayer
+import org.geotrailmaps.data.FeatureType
+import org.geotrailmaps.data.LayerKind
+import org.geotrailmaps.data.MapLibrary
+import org.geotrailmaps.data.TrackData
+import org.geotrailmaps.ui.theme.MapStyle
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import org.geotrailmaps.geo.Geodesy
 import org.geotrailmaps.geo.LatLon
 import java.io.File
@@ -23,6 +33,10 @@ import java.io.File
  * maps or the screen is off; [RecordingService] feeds it locations. Every accepted point
  * and every pause/resume is appended to a file, so an unfinished track survives the app
  * being killed and comes back paused.
+ *
+ * Tracks belong to no map: [stop] saves them in the global "Recorded tracks" layer (or back
+ * into the track continued), which every map they overlap shows. So recording works the
+ * same from any map, the list, or the notification.
  */
 object TrackRecorder {
     enum class Status { IDLE, RECORDING, PAUSED }
@@ -35,9 +49,8 @@ object TrackRecorder {
         val elevations: List<Double?> = emptyList(),
         /** Indices of points that begin a new segment, as [org.geotrailmaps.data.TrackData.segmentStarts]. */
         val segmentStarts: List<Int> = emptyList(),
-        /** Set when continuing a saved track: Stop updates that feature, on [continuingMapId]. */
+        /** Set when continuing a saved track (in a global layer): Stop updates that feature. */
         val continuingId: String? = null,
-        val continuingMapId: String? = null,
         val distance: Double = 0.0,
         val ascent: Double = 0.0,
         val startedAt: Long = 0,
@@ -45,6 +58,8 @@ object TrackRecorder {
         val pastMillis: Long = 0,
         /** When the current recording segment began, while recording. */
         val resumedAt: Long = 0,
+        /** When it was paused, while paused. */
+        val pausedAt: Long = 0,
     ) {
         fun elapsedMillis(now: Long = System.currentTimeMillis()) =
             pastMillis + if (status == Status.RECORDING) (now - resumedAt).coerceAtLeast(0) else 0
@@ -54,6 +69,7 @@ object TrackRecorder {
     val state: StateFlow<State> = _state
 
     private var file: File? = null
+    private lateinit var library: Lazy<MapLibrary>
     /** Bumped on each start, so a late cleanup can't delete a newer recording's log. */
     private var generation = 0
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -66,7 +82,9 @@ object TrackRecorder {
     private var gap = false
 
     /** Call once at startup; restores an unfinished track as paused. */
-    fun init(context: Context) {
+    /** [library] is only needed to save, so starting the app doesn't wait for it to load. */
+    fun init(context: Context, library: Lazy<MapLibrary>) {
+        this.library = library
         val f = File(context.filesDir, "recording.csv")
         file = f
         if (!f.isFile || _state.value.status != Status.IDLE) return
@@ -75,26 +93,42 @@ object TrackRecorder {
         runCatching { if (f.length() > 0 && !f.readText().endsWith("\n")) f.appendText("\n") }
         runCatching { replay(f.readLines()) }
         recovered = _state.value.status != Status.IDLE
+        if (recovered) PausedNotification.show(context.applicationContext)
     }
+
+    /**
+     * Maps that were open while this track recorded, by id: once paused, its controls stay on
+     * them even where it has no points. For display only; not kept across restarts.
+     */
+    val recordedOn = mutableSetOf<String>()
 
     /** True once if [init] restored a track left over from a previous run. */
     fun takeRecoveredFlag(): Boolean = recovered.also { recovered = false }
 
     /** True while the last track's save is being written; its log mustn't be replaced yet. */
-    private var saving = false
+    private val savingState = MutableStateFlow(false)
+    private var saving: Boolean
+        get() = savingState.value
+        set(value) { savingState.value = value }
+
+    /** Waits until the last track's save has been written (or failed: then it's back, paused). */
+    suspend fun awaitSaved() {
+        savingState.first { !it }
+    }
 
     /**
-     * Starts a new track, or continues [from] (a saved track on map [mapId]) where it ended.
+     * Starts a new track, or continues [from] (a saved track in a global layer) where it ended.
      * False (and nothing starts) while the previous track is still being saved.
      */
-    fun start(context: Context, from: Feature? = null, mapId: String? = null): Boolean {
+    fun start(context: Context, from: Feature? = null): Boolean {
         if (saving) return false
         val now = System.currentTimeMillis()
         altitudeRef = null
         generation++
+        recordedOn.clear()
         gap = from != null
-        var s = State(status = Status.RECORDING, startedAt = now, resumedAt = now, continuingId = from?.id, continuingMapId = from?.let { mapId })
-        val log = StringBuilder("START,$now,${from?.id ?: ""},${s.continuingMapId ?: ""}\n")
+        var s = State(status = Status.RECORDING, startedAt = now, resumedAt = now, continuingId = from?.id)
+        val log = StringBuilder("START,$now,${from?.id ?: ""}\n")
         if (from != null) {
             // Carry the saved track over, so distance and time continue from it.
             val past = from.track?.resumeMillis ?: 0L
@@ -116,6 +150,7 @@ object TrackRecorder {
         }
         _state.value = s
         file?.writeText(log.toString())
+        PausedNotification.cancel(context)
         startService(context)
         return true
     }
@@ -124,9 +159,10 @@ object TrackRecorder {
         val s = _state.value
         if (s.status != Status.RECORDING) return
         val now = System.currentTimeMillis()
-        _state.value = s.copy(status = Status.PAUSED, pastMillis = s.elapsedMillis(now))
+        _state.value = s.copy(status = Status.PAUSED, pastMillis = s.elapsedMillis(now), pausedAt = now)
         append("PAUSE,$now")
         stopService(context)
+        PausedNotification.show(context)
     }
 
     fun resume(context: Context) {
@@ -137,6 +173,7 @@ object TrackRecorder {
         gap = true
         _state.value = s.copy(status = Status.RECORDING, resumedAt = now)
         append("RESUME,$now")
+        PausedNotification.cancel(context)
         startService(context)
     }
 
@@ -151,8 +188,44 @@ object TrackRecorder {
         // Kept in the log, so if the save fails the recovered track's time stops here too.
         if (s.status == Status.RECORDING) append("PAUSE,$now")
         stopService(context)
+        PausedNotification.cancel(context)
         _state.value = State()
         return result
+    }
+
+    /**
+     * Ends the recording and saves it: into the track it continued, if that still exists,
+     * else as a new track in the global "Recorded tracks" layer. Returns the saved track, or
+     * null if it was too short to save (and is discarded). Main thread only.
+     */
+    fun stop(context: Context): Feature? {
+        // Already stopped (e.g. a second tap): don't touch the log of the save in progress.
+        if (_state.value.status == Status.IDLE) return null
+        val track = finish(context)
+        if (track.points.size < 2) {
+            clearLog()
+            return null
+        }
+        val data = TrackData(track.times, track.elevations, track.elapsedMillis(), track.ascent, track.segmentStarts)
+        val store = library.value
+        val g = store.global.value
+        val continued = g.features.find { it.id == track.continuingId }
+        val layer = g.layers.find { it.kind == LayerKind.TRACKS }
+            ?: FeatureLayer(name = "Recorded tracks", color = MapStyle.recordingTrack.toArgb(), kind = LayerKind.TRACKS)
+        val saved = continued?.copy(points = track.points, track = data, visible = true) ?: Feature(
+            type = FeatureType.LINE,
+            name = "Track " + SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(track.startedAt)),
+            points = track.points,
+            color = layer.color,
+            layerId = layer.id,
+            track = data,
+        )
+        val job = store.updateGlobal(notify = false) { d ->
+            if (continued != null) d.copy(features = d.features.map { if (it.id == saved.id) saved else it })
+            else d.copy(layers = if (d.layers.any { it.id == layer.id }) d.layers else listOf(layer) + d.layers, features = d.features + saved)
+        }
+        clearLogAfter(job, context, track, saved.id)
+        return saved
     }
 
     /** Deletes the recovery log now (discarded, or too short to save). */
@@ -161,14 +234,14 @@ object TrackRecorder {
     }
 
     /**
-     * Deletes the recovery log once [saved] (the write of [track] as feature [featureId] on map
-     * [mapId]) completes. Runs in an app-wide scope, so leaving the screen doesn't cancel it, and
+     * Deletes the recovery log once [saved] (the write of [track] as feature [featureId])
+     * completes. Runs in an app-wide scope, so leaving the screen doesn't cancel it, and
      * does nothing if another recording has started since.
      *
      * If the write fails (e.g. storage full), the track comes back paused, set to update that
      * feature, so stopping it again retries the save without making a duplicate.
      */
-    fun clearLogAfter(saved: Deferred<Boolean>, context: Context, track: State, featureId: String, mapId: String) {
+    private fun clearLogAfter(saved: Deferred<Boolean>, context: Context, track: State, featureId: String) {
         val gen = generation
         val app = context.applicationContext
         saving = true
@@ -176,10 +249,11 @@ object TrackRecorder {
             val ok = try { saved.await() } finally { saving = false }
             if (gen != generation || _state.value.status != Status.IDLE) return@launch
             if (ok) return@launch clearLog()
-            _state.value = track.copy(status = Status.PAUSED, continuingId = featureId, continuingMapId = mapId)
+            _state.value = track.copy(status = Status.PAUSED, continuingId = featureId, pausedAt = System.currentTimeMillis())
             gap = true
             // The log is kept for recovery; point it at the feature too.
-            append("LINK,$featureId,$mapId")
+            append("LINK,$featureId")
+            PausedNotification.show(app)
             Toast.makeText(app, "The track wasn't saved, so it's paused. Storage may be full: free some space, then stop it again.", Toast.LENGTH_LONG).show()
         }
     }
@@ -254,21 +328,20 @@ object TrackRecorder {
                     s = State(
                         status = Status.RECORDING, startedAt = it, resumedAt = it,
                         continuingId = v.getOrNull(2)?.ifEmpty { null },
-                        continuingMapId = v.getOrNull(3)?.ifEmpty { null },
                     )
                 }
                 "BASE" -> {
                     s = s.copy(pastMillis = v[1].toLong(), ascent = v[2].toDouble(), startedAt = v[3].toLong())
                     basePoints = true
                 }
-                "PAUSE" -> s = s.copy(status = Status.PAUSED, pastMillis = s.pastMillis + (v[1].toLong() - s.resumedAt).coerceAtLeast(0))
+                "PAUSE" -> s = s.copy(status = Status.PAUSED, pastMillis = s.pastMillis + (v[1].toLong() - s.resumedAt).coerceAtLeast(0), pausedAt = v[1].toLong())
                 "RESUME" -> {
                     s = s.copy(status = Status.RECORDING, resumedAt = v[1].toLong())
                     basePoints = false
                     altitudeRef = null
                 }
                 "SEG" -> newSegment = true
-                "LINK" -> s = s.copy(continuingId = v[1].ifEmpty { null }, continuingMapId = v[2].ifEmpty { null })
+                "LINK" -> s = s.copy(continuingId = v[1].ifEmpty { null })
                 "P" -> {
                     val p = LatLon(v[1].toDouble(), v[2].toDouble())
                     val alt = v[3].toDoubleOrNull()
@@ -292,8 +365,9 @@ object TrackRecorder {
         s = s.copy(points = points, times = times, elevations = elevations, segmentStarts = segmentStarts)
         // The app died while recording: count time up to the last point, then come back paused.
         if (s.status == Status.RECORDING) {
-            s = s.copy(status = Status.PAUSED, pastMillis = s.pastMillis + (maxOf(lastPointTime, s.resumedAt) - s.resumedAt))
-            append("PAUSE,${maxOf(lastPointTime, s.resumedAt)}")
+            val end = maxOf(lastPointTime, s.resumedAt)
+            s = s.copy(status = Status.PAUSED, pastMillis = s.pastMillis + (end - s.resumedAt), pausedAt = end)
+            append("PAUSE,$end")
         }
         altitudeRef = null
         _state.value = s
