@@ -9,6 +9,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,6 +76,12 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
+            ListItem(
+                headlineContent = { Text("Open-source licenses") },
+                supportingContent = { Text("License and notices for this app and its components") },
+                trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+                modifier = Modifier.clickable { showLicenses = true },
+            )
             SectionTitle("Your data")
             Text(
                 "Maps, tracks and features are stored on this phone. Android's backup may include them, but large maps " +
@@ -82,11 +89,6 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                     "map's More menu to export its features and its PDF.",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            ListItem(
-                headlineContent = { Text("Open-source licenses") },
-                supportingContent = { Text("License and notices for this app and its components") },
-                modifier = Modifier.clickable { showLicenses = true },
             )
         }
     }
