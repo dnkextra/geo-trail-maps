@@ -118,9 +118,6 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
     private fun change(global: Boolean, notify: Boolean = true, change: (MapFeatures) -> MapFeatures) =
         if (global) changeGlobal(notify, change) else changeLocal(notify, change)
 
-    private fun MapFeatures.withFeature(id: String, edit: (Feature) -> Feature) = copy(features = features.map { if (it.id == id) edit(it) else it })
-    private fun MapFeatures.withLayer(id: String, edit: (FeatureLayer) -> FeatureLayer) = copy(layers = layers.map { if (it.id == id) edit(it) else it })
-
     /** Page positions of features, for fast drawing; null for maps without georeferencing. */
     val geometry = entry.geo?.let { g ->
         // Projected here, while the map opens in the background, rather than on the first frame.
@@ -203,13 +200,11 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
 
     /** Adds or replaces [feature]; the result completes with true once it's written to disk. */
     fun upsert(feature: Feature, notify: Boolean = true): Deferred<Boolean> =
-        change(isGlobal(feature.layerId), notify) { d ->
-            if (d.features.any { it.id == feature.id }) d.withFeature(feature.id) { feature } else d.copy(features = d.features + feature)
-        }
+        change(isGlobal(feature.layerId), notify) { it.upsert(feature) }
 
     fun delete(id: String) {
         geometry?.forget(listOf(id))
-        change(isGlobalFeature(id)) { d -> d.copy(features = d.features.filter { it.id != id }) }
+        change(isGlobalFeature(id)) { it.removeFeature(id) }
     }
 
     /** Adds an imported layer and its features, to this map. */
@@ -304,10 +299,8 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
             val updated = l.copy(trails = true, trailFolders = l.trailFolders?.plus(folders))
             return withLayer(l.id) { updated } to updated
         }
-        val layer = when (kind) {
-            LayerKind.DRAWN_TRAILS -> FeatureLayer(name = "My trails", color = MapStyle.trailLine.toArgb(), kind = kind, visible = false, trails = true)
-            else -> FeatureLayer(name = "From the map", color = MapStyle.trailLine.toArgb(), kind = kind, visible = false, trails = true)
-        }
+        val name = if (kind == LayerKind.DRAWN_TRAILS) "My trails" else "From the map"
+        val layer = FeatureLayer(name = name, color = MapStyle.trailLine.toArgb(), kind = kind, visible = false, trails = true)
         return copy(layers = listOf(layer) + layers) to layer
     }
 
@@ -401,17 +394,16 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
     }
 
     /** Visible features in visible layers: what's drawn and tappable. */
-    val shownFeatures: List<Feature>
-        get() {
-            val hidden = layers.filter { !it.visible }.map { it.id }.toSet()
-            return if (hidden.isEmpty() && features.all { it.visible }) features
-            else features.filter { it.visible && it.layerId !in hidden }
-        }
+    val shownFeatures: List<Feature> by derivedStateOf {
+        val hidden = layers.filter { !it.visible }.map { it.id }.toSet()
+        if (hidden.isEmpty() && features.all { it.visible }) features
+        else features.filter { it.visible && it.layerId !in hidden }
+    }
 
     /** Removes a layer together with everything imported in it; a global one from every map. */
     fun deleteLayer(id: String) {
         geometry?.forget(features.filter { it.layerId == id }.map { it.id })
-        change(isGlobal(id)) { d -> d.copy(layers = d.layers.filter { it.id != id }, features = d.features.filter { it.layerId != id }) }
+        change(isGlobal(id)) { it.removeLayer(id) }
     }
 
     override fun close() {

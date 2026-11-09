@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -315,9 +314,7 @@ class MapLibrary(private val context: Context) {
             .put("layers", JSONArray().apply { data.layers.forEach { put(layerToJson(it)) } })
             .put("features", JSONArray().apply { data.features.forEach { put(featureToJson(it)) } })
             .apply { if (data.hiddenGlobal.isNotEmpty()) put("hiddenGlobal", JSONArray(data.hiddenGlobal.toList())) }
-        val tmp = File(file.path + ".tmp")
-        tmp.writeText(json.toString())
-        if (!tmp.renameTo(file)) throw IOException("rename failed")
+        file.writeTextAtomically(json.toString())
         true
     } catch (e: IOException) {
         false
@@ -356,11 +353,15 @@ class MapLibrary(private val context: Context) {
                     .put("neatline", JSONArray().apply { g.neatline.forEach { put(JSONArray(listOf(it.x, it.y))) } }),
             )
         }
-        // Written aside and renamed over the old one, so a failed write can't leave it damaged
-        // (a map without readable details wouldn't be listed).
-        val tmp = File(metaFile(e.id).path + ".tmp")
-        tmp.writeText(json.toString())
-        if (!tmp.renameTo(metaFile(e.id))) throw IOException("rename failed")
+        // A map without readable details wouldn't be listed.
+        metaFile(e.id).writeTextAtomically(json.toString())
+    }
+
+    /** Written aside and renamed over the old file, so a failed write can't leave it damaged. */
+    private fun File.writeTextAtomically(text: String) {
+        val tmp = File("$path.tmp")
+        tmp.writeText(text)
+        if (!tmp.renameTo(this)) throw IOException("rename failed")
     }
 
     private fun entryFromJson(o: JSONObject): MapEntry {
@@ -383,9 +384,9 @@ class MapLibrary(private val context: Context) {
             fileSize = o.getLong("fileSize"),
             pageWidth = o.getInt("pageWidth"),
             pageHeight = o.getInt("pageHeight"),
-            folder = if (o.isNull("folder")) null else o.optString("folder").ifEmpty { null },
+            folder = o.optStringOrNull("folder"),
             seeThrough = o.optDouble("seeThrough", 0.0).toFloat().coerceIn(0f, 1f),
-            basemap = if (o.isNull("basemap")) null else o.optString("basemap").ifEmpty { null },
+            basemap = o.optStringOrNull("basemap"),
             archived = o.optBoolean("archived", false),
             pageCount = o.optInt("pageCount", 1),
             geo = geo,
@@ -457,14 +458,17 @@ class MapLibrary(private val context: Context) {
             points = List(pts.length()) { i -> pts.getJSONArray(i).let { LatLon(it.getDouble(0), it.getDouble(1)) } },
             color = o.getInt("color"),
             createdAt = o.getLong("createdAt"),
-            layerId = if (o.isNull("layerId")) null else o.optString("layerId").ifEmpty { null },
+            layerId = o.optStringOrNull("layerId"),
             track = o.optJSONObject("track")?.let(::trackFromJson),
             visible = o.optBoolean("visible", true),
-            folder = if (o.isNull("folder")) null else o.optString("folder").ifEmpty { null },
+            folder = o.optStringOrNull("folder"),
             trail = o.optBoolean("trail", false),
         )
     }
 }
+
+/** The string at [key], or null if it's missing, null or empty. */
+private fun JSONObject.optStringOrNull(key: String): String? = if (isNull(key)) null else optString(key).ifEmpty { null }
 
 /** The file name a content URI was shared with. */
 fun Context.displayName(uri: Uri): String? =

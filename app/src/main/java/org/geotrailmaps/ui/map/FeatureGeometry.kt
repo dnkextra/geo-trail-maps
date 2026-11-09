@@ -42,7 +42,7 @@ class FeatureGeometry(private val geo: GeoReference) {
             minX = minOf(minX, xy[i]); maxX = maxOf(maxX, xy[i])
             minY = minOf(minY, xy[i + 1]); maxY = maxOf(maxY, xy[i + 1])
         }
-        val starts = f.track?.segmentStarts.orEmpty().filter { it in 1 until f.points.size }.sorted().toIntArray()
+        val starts = f.track?.segmentStarts(f.points.size).orEmpty().toIntArray()
         return Shape(f.points, xy, minX, minY, maxX, maxY, starts).also { shapes[f.id] = it }
     }
 }

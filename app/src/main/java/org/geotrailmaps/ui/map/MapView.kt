@@ -101,7 +101,7 @@ class MapViewport(val pageWidth: Float, val pageHeight: Float) {
         return Rect(corners.minOf { it.x }, corners.minOf { it.y }, corners.maxOf { it.x }, corners.maxOf { it.y })
     }
 
-    val center: PagePoint get() = toPage(Offset(size.width / 2f, insetTop + visibleHeight / 2f))
+    val center: PagePoint get() = toPage(pivot)
 
     fun onSizeChanged(newSize: IntSize) {
         if (newSize.width == 0 || newSize.height == 0) return
@@ -260,15 +260,13 @@ fun MapView(
                         val zoom = event.calculateZoom()
                         val pan = event.calculatePan()
                         if (event.changes.size > 1) multiTouch = true
+                        totalPan += pan
                         if (!moving) {
-                            totalPan += pan
                             totalZoom *= zoom
                             val zoomMotion = abs(1 - totalZoom) * event.calculateCentroidSize(useCurrent = false)
                             if (zoomMotion > viewConfiguration.touchSlop || totalPan.getDistance() > viewConfiguration.touchSlop) {
                                 moving = true
                             }
-                        } else {
-                            totalPan += pan
                         }
                         // Only a real pan counts as moving away (zooming keeps follow/compass on).
                         if (moving && !reportedMove && totalPan.getDistance() > viewConfiguration.touchSlop * 3) {

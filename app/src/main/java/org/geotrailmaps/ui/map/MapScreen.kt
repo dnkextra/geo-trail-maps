@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableLongStateOf
 import org.geotrailmaps.track.TrackRecorder
 import kotlin.math.abs
@@ -50,7 +51,6 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.statusBars
@@ -172,6 +172,7 @@ import org.geotrailmaps.geo.LatLon
 import org.geotrailmaps.geo.PagePoint
 import org.geotrailmaps.geo.TrailNetwork
 import org.geotrailmaps.geo.TrailRoute
+import org.geotrailmaps.geo.normalizeDegrees
 import org.geotrailmaps.geo.route
 import org.geotrailmaps.location.LocationTracker
 import org.geotrailmaps.render.BasemapSource
@@ -246,6 +247,10 @@ private fun MapContent(
 
     val location by tracker.location.collectAsState()
     val heading by tracker.heading.collectAsState()
+    DisposableEffect(tracker) {
+        tracker.compassWanted = true
+        onDispose { tracker.compassWanted = false }
+    }
     val locationOn by tracker.enabled.collectAsState()
     val openLocationSettings = { context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
     val format by settings.coordinateFormat.collectAsState()
@@ -254,7 +259,6 @@ private fun MapContent(
     val lastBasemap by settings.basemap.collectAsState()
     LaunchedEffect(session) { if (session.basemapChoice == null) session.setBasemap(lastBasemap) }
     val basemapSource = if (session.basemapChoice == null) lastBasemap else session.basemap
-    val basemapOn = basemapSource != null
     // The tile credit shows on the map for a few seconds whenever the background map appears,
     // then fades; it stays in the layer list.
     var showCredit by remember { mutableStateOf(false) }
@@ -404,18 +408,17 @@ private fun MapContent(
         snapshotFlow { listOf(viewport.scale, viewport.offset, viewport.size, viewport.rotation, session.base, session.seeThrough > 0f) }
             .collect { session.requestTiles() }
     }
-    val source = basemapSource
-    if (source != null && proj != null) {
+    if (basemapSource != null && proj != null) {
         val lifecycleOwner = LocalLifecycleOwner.current
-        LaunchedEffect(proj, lifecycleOwner, source) {
+        LaunchedEffect(proj, lifecycleOwner, basemapSource) {
             // Only while visible: stopping the app or closing the map drops queued downloads and retries.
             lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 try {
                     // Only when the tile set changes, and at most every 80 ms while moving, so a
                     // pinch doesn't queue every zoom level in between. Throttled, not debounced:
                     // compass turns or a long pan never pause long enough for a debounce.
-                    snapshotFlow { visibleTiles(proj, viewport, density.density, source.maxZoom).toSet() }.conflate().collect {
-                        basemap.request(source, it.toList())
+                    snapshotFlow { visibleTiles(proj, viewport, density.density, basemapSource.maxZoom).toSet() }.conflate().collect {
+                        basemap.request(basemapSource, it.toList())
                         delay(80)
                     }
                 } finally {
@@ -427,15 +430,25 @@ private fun MapContent(
     LaunchedEffect(myLatLon, following) {
         if (following && onMap) viewport.centerOn(geo.toPage(myLatLon))
     }
-    LaunchedEffect(compass, heading, myLatLon) {
-        if (compass && adding == null && !navigating && !addingTrails && heading != null && proj != null && myLatLon != null) {
+    // The heading is read here rather than as a key: it changes many times a second, and as a
+    // key every change would recompose the whole screen.
+    LaunchedEffect(compass, myLatLon) {
+        if (!compass || proj == null || myLatLon == null) return@LaunchedEffect
+        snapshotFlow { heading }.collect { h ->
+            if (h == null || adding != null || navigating || addingTrails) return@collect
             // Turn the map so the heading points up, whatever the map's own north.
             val a = proj.toScreen(myLatLon)
-            val b = proj.toScreen(Geodesy.destination(myLatLon, heading!!.toDouble(), 50.0))
+            val b = proj.toScreen(Geodesy.destination(myLatLon, h.toDouble(), 50.0))
             val theta = Math.toDegrees(atan2((b.y - a.y).toDouble(), (b.x - a.x).toDouble())).toFloat()
             viewport.rotation = normalizeDegrees(-(theta + 90f))
         }
     }
+    /** Shows [text], replacing the current message rather than queueing behind it; true if [action] was tapped. */
+    suspend fun replaceMessage(text: String, action: String? = null, duration: SnackbarDuration = SnackbarDuration.Short): Boolean {
+        snackbar.currentSnackbarData?.dismiss()
+        return snackbar.showSnackbar(text, action, duration = duration) == SnackbarResult.ActionPerformed
+    }
+
     // Standing on another imported map? Offer it once per visit.
     val suggestedMaps = remember { mutableSetOf<String>() }
     val otherMapHere = if (myLatLon != null && !onMap && !stale) {
@@ -446,20 +459,13 @@ private fun MapContent(
         if (addingTrails) return@LaunchedEffect
         val other = otherMapHere ?: return@LaunchedEffect
         if (!suggestedMaps.add(other.id)) return@LaunchedEffect
-        snackbar.currentSnackbarData?.dismiss()
-        if (snackbar.showSnackbar("You're on \"${other.name}\"", "Open", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) {
-            onOpenMap(other.id)
-        }
+        if (replaceMessage("You're on \"${other.name}\"", "Open", SnackbarDuration.Long)) onOpenMap(other.id)
     }
 
-    // A new message replaces the current one rather than queueing behind it.
-    fun showMessage(text: String, duration: SnackbarDuration = SnackbarDuration.Short) = scope.launch {
-        snackbar.currentSnackbarData?.dismiss()
-        snackbar.showSnackbar(text, duration = duration)
-    }
+    fun showMessage(text: String, duration: SnackbarDuration = SnackbarDuration.Short) = scope.launch { replaceMessage(text, duration = duration) }
 
     // Once per map opened: without a connection, only background areas viewed before can show.
-    val basemapOffline = basemapOn && basemap.offline
+    val basemapOffline = basemapSource != null && basemap.offline
     var toldOffline by remember { mutableStateOf(false) }
     LaunchedEffect(basemapOffline) {
         if (basemapOffline && !toldOffline) {
@@ -476,6 +482,12 @@ private fun MapContent(
         if (from != 0f) scope.launch { animate(from, 0f) { v, _ -> viewport.rotation = v } }
     }
 
+    /** The map stops moving by itself: no following, no compass. */
+    fun stopAutoMove() {
+        following = false
+        if (compass) exitCompass()
+    }
+
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     // Approximate location is too coarse for the recorder's accuracy filter: no points would be kept.
     fun hasPreciseLocation() = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -484,15 +496,33 @@ private fun MapContent(
         onRequestLocationPermission()
     }
 
-    fun startRecording() {
-        if (!hasPreciseLocation()) return askForPreciseLocation()
+    /** Starts recording (onto [from], if given); false if it couldn't, and the user is told why. */
+    fun beginRecording(from: Feature? = null): Boolean {
+        if (!hasPreciseLocation()) {
+            askForPreciseLocation()
+            return false
+        }
         // The recording notification needs this; recording works without it, just silently.
         if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        if (!TrackRecorder.start(context.applicationContext)) return run { showMessage("Still saving the last track. Try again in a moment.") }
+        if (!TrackRecorder.start(context.applicationContext, from)) {
+            showMessage("Still saving the last track. Try again in a moment.")
+            return false
+        }
+        return true
+    }
+
+    fun startRecording() {
+        if (!beginRecording()) return
         if (locationOn) showMessage("Recording a track.")
         else showMessage("Recording a track, but device location is off. Turn it on to record points.", SnackbarDuration.Long)
+    }
+
+    /** Highlights feature [id] and opens it in the editor sheet. */
+    fun openEditor(id: String) {
+        selectedId = id
+        editingId = id
     }
 
     /** Saves the recording (see [TrackRecorder.stop]) and opens it, if it's on this map. */
@@ -502,18 +532,13 @@ private fun MapContent(
         if (saved == null) return run { showMessage("The track was too short to save.") }
         if (!overlaps(saved, session.coverage)) return run { showMessage("Saved \"${saved.name}\" in Tracks.") }
         saved.layerId?.let { session.setLayerVisible(it, true) }
-        selectedId = saved.id
-        editingId = saved.id
+        openEditor(saved.id)
     }
 
     /** Records more onto [f]. Its layer becomes global if it isn't, since recordings are saved there. */
     fun continueTrack(f: Feature) {
         val layer = session.layers.find { it.id == f.layerId } ?: return
-        if (!hasPreciseLocation()) return askForPreciseLocation()
-        if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        if (!TrackRecorder.start(context.applicationContext, from = f)) return run { showMessage("Still saving the last track. Try again in a moment.") }
+        if (!beginRecording(from = f)) return
         if (layer.global) return run { showMessage("Continuing \"${f.name}\". Stop saves it into the same track.") }
         scope.launch {
             // If the layer can't move (the library says why), Stop saves a new track in Tracks instead.
@@ -546,8 +571,7 @@ private fun MapContent(
         val n = session.features.count { it.type == FeatureType.POINT } + 1
         val f = Feature(type = FeatureType.POINT, name = "Placemark $n", points = listOf(at), color = MapStyle.placemarkColor.toArgb())
         session.upsert(f)
-        selectedId = f.id
-        editingId = f.id
+        openEditor(f.id)
     }
 
     fun closeTools() {
@@ -562,8 +586,7 @@ private fun MapContent(
     fun startTool() {
         closeTools()
         selectedId = null
-        following = false
-        if (compass) exitCompass()
+        stopAutoMove()
     }
 
     /** Saves the tapped points as a line or area and opens it in the editor. */
@@ -573,8 +596,7 @@ private fun MapContent(
         val f = Feature(type = type, name = if (area) "Area $n" else "Line $n", points = points, color = MapStyle.lineColor.toArgb())
         session.upsert(f)
         closeTools()
-        selectedId = f.id
-        editingId = f.id
+        openEditor(f.id)
     }
 
     /** Shows two places together, such as where you are and where you're going. */
@@ -582,8 +604,7 @@ private fun MapContent(
         val g = geo ?: return
         val pa = g.toPage(a)
         val pb = g.toPage(b)
-        following = false
-        if (compass) exitCompass()
+        stopAutoMove()
         viewport.showRect(minOf(pa.x, pb.x).toFloat(), minOf(pa.y, pb.y).toFloat(), maxOf(pa.x, pb.x).toFloat(), maxOf(pa.y, pb.y).toFloat())
     }
 
@@ -617,10 +638,16 @@ private fun MapContent(
     fun showFeatures(list: List<Feature>) {
         val g = session.geometry ?: return
         if (list.isEmpty()) return
-        following = false
-        if (compass) exitCompass()
+        stopAutoMove()
         val shapes = list.map { g.shape(it) }
         viewport.showRect(shapes.minOf { it.minX }, shapes.minOf { it.minY }, shapes.maxOf { it.maxX }, shapes.maxOf { it.maxY })
+    }
+
+    /** Unhides [f] (it can't be shown hidden), zooms to it and highlights it. */
+    fun showFeature(f: Feature) {
+        session.reveal(f)
+        showFeatures(listOf(f))
+        selectedId = f.id
     }
 
     fun discardTrails() {
@@ -636,8 +663,7 @@ private fun MapContent(
         adding = null
         pressed = null
         searching = false
-        following = false
-        if (compass) exitCompass()
+        stopAutoMove()
         trailMode = TrailMode.DRAW
         discardTrails()
         addingTrails = true
@@ -662,12 +688,9 @@ private fun MapContent(
         val kinds = setOfNotNull(LayerKind.DRAWN_TRAILS.takeIf { drawn > 0 }, LayerKind.MAP_LINES.takeIf { picked > 0 })
         val hidden = session.layers.filter { it.kind in kinds && !it.visible }
         val text = "Added " + if (n == 1) "1 trail" else "$n trails"
+        if (hidden.isEmpty()) return run { showMessage(text) }
         scope.launch {
-            snackbar.currentSnackbarData?.dismiss()
-            if (hidden.isEmpty()) snackbar.showSnackbar(text)
-            else if (snackbar.showSnackbar("$text (not shown on the map)", "Show", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) {
-                hidden.forEach { session.setLayerVisible(it.id, true) }
-            }
+            if (replaceMessage("$text (not shown on the map)", "Show", SnackbarDuration.Long)) hidden.forEach { session.setLayerVisible(it.id, true) }
         }
     }
 
@@ -755,8 +778,7 @@ private fun MapContent(
 
     fun goTo(p: LatLon) {
         closeSearch()
-        following = false
-        if (compass) exitCompass()
+        stopAutoMove()
         searchPoint = p
         viewport.showPoint(geo!!.toPage(p))
         if (!geo.contains(p)) showMessage("That point is outside this map.")
@@ -798,8 +820,7 @@ private fun MapContent(
         pressed = p
         selectedId = null
         // Following or compass mode would pull the spot away on the next fix or turn.
-        following = false
-        if (compass) exitCompass()
+        stopAutoMove()
         // The controls come back for its actions; keep the spot from ending up under them.
         if (chromeHidden) {
             chromeHidden = false
@@ -868,8 +889,7 @@ private fun MapContent(
                     val pinHeight = with(density) { MapStyle.pinHeight.toPx() }
                     val hit = hitTest(session.shownFeatures, pos, session.geometry!!, viewport, density.density, pinHeight)
                     if (hit != null) {
-                        selectedId = hit.id
-                        editingId = hit.id
+                        openEditor(hit.id)
                     } else {
                         // The highlight outlives the feature's sheet, so you can look at it
                         // on the map; this tap only clears it, the next hides the controls.
@@ -891,10 +911,10 @@ private fun MapContent(
                 press(proj!!.toLatLon(pos))
             } else null,
             underlay = {
-                if (source != null && proj != null) drawBasemap(basemap, source, visibleTiles(proj, viewport, density.density, source.maxZoom), proj, tilePaint)
+                if (basemapSource != null && proj != null) drawBasemap(basemap, basemapSource, visibleTiles(proj, viewport, density.density, basemapSource.maxZoom), proj, tilePaint)
             },
             // Only over a background map: over the plain background it would just look faded.
-            seeThrough = if (source != null && proj != null) session.seeThrough else 0f,
+            seeThrough = if (basemapSource != null && proj != null) session.seeThrough else 0f,
         ) {
             if (proj != null) {
                 // While a saved track is being continued, the live line (which includes it) replaces it.
@@ -942,11 +962,11 @@ private fun MapContent(
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
                     AnimatedVisibility(
-                        visible = basemapOn && showCredit,
+                        visible = basemapSource != null && showCredit,
                         enter = fadeIn(),
                         exit = fadeOut(),
                         modifier = Modifier.weight(1f, fill = false),
-                    ) { BasemapAttribution(source ?: BasemapSource.OSM) }
+                    ) { BasemapAttribution(basemapSource ?: BasemapSource.OSM) }
                     Spacer(Modifier.weight(1f))
                     if ((compass || abs(viewport.rotation) > 0.5f) && proj != null) {
                         val c = geo.toLatLon(viewport.center)
@@ -1028,9 +1048,7 @@ private fun MapContent(
                     },
                     onShow = { f ->
                         closeSearch()
-                        session.reveal(f)
-                        showFeatures(listOf(f))
-                        selectedId = f.id
+                        showFeature(f)
                     },
                     // Gets only the space left after the panel, so many results can't squeeze it.
                     modifier = Modifier.weight(1f, fill = false).windowInsetsPadding(horizontalSafeArea).padding(horizontal = 8.dp, vertical = 6.dp),
@@ -1133,9 +1151,7 @@ private fun MapContent(
                                     matches.size == 1 -> {
                                         val f = matches.single()
                                         closeSearch()
-                                        session.reveal(f)
-                                        showFeatures(listOf(f))
-                                        selectedId = f.id
+                                        showFeature(f)
                                     }
                                     // Several matches: drop the keyboard so the list is easy to pick from.
                                     else -> keyboard?.hide()
@@ -1238,7 +1254,7 @@ private fun MapContent(
                         )
                     } else {
                         Column {
-                        StatusLine(geo, location, myLatLon, onMap, stale, fixAgeSeconds, hasLocationPermission, locationOn, format, units, onRequestLocationPermission, openLocationSettings)
+                        StatusLine(geo, location, onMap, fixAgeSeconds, hasLocationPermission, locationOn, format, units, onRequestLocationPermission, openLocationSettings)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                             ToolbarButton(Icons.Filled.Add, "Add", enabled = geo != null) {
                                 // Aim with the crosshair, starting at your position when you're on the map.
@@ -1290,12 +1306,7 @@ private fun MapContent(
             onDelete = {
                 if (f.id == selectedId) selectedId = null
                 session.delete(f.id)
-                scope.launch {
-                    snackbar.currentSnackbarData?.dismiss()
-                    if (snackbar.showSnackbar("\"${f.name}\" deleted", "Undo", duration = SnackbarDuration.Short) == SnackbarResult.ActionPerformed) {
-                        session.upsert(f)
-                    }
-                }
+                scope.launch { if (replaceMessage("\"${f.name}\" deleted", "Undo")) session.upsert(f) }
             },
             onDismiss = { editingId = null }, // stays highlighted until the next tap on the map
         )
@@ -1327,15 +1338,12 @@ private fun MapContent(
                 },
                 onShow = { f ->
                     showList = false
-                    session.reveal(f) // can't show what's hidden
-                    showFeatures(listOf(f))
-                    selectedId = f.id
+                    showFeature(f)
                 },
                 onEdit = { f ->
                     showList = false
                     session.reveal(f) // so the edited feature is visible afterwards
-                    selectedId = f.id
-                    editingId = f.id
+                    openEditor(f.id)
                 },
                 onDelete = { f ->
                     if (f.id == editingId) editingId = null
@@ -1408,8 +1416,7 @@ private fun MapContent(
             },
             onDiscard = {
                 showStopTrack = false
-                TrackRecorder.finish(context.applicationContext)
-                TrackRecorder.clearLog()
+                TrackRecorder.discard(context.applicationContext)
                 session.geometry?.forget(listOf(RECORDING_ID))
                 showMessage("Track discarded.")
             },
@@ -1461,8 +1468,7 @@ private fun MapContent(
                     TextButton(onClick = { askingUnfinished = false }) { Text("Cancel") }
                     TextButton(onClick = {
                         askingUnfinished = false
-                        TrackRecorder.finish(context.applicationContext)
-                        TrackRecorder.clearLog()
+                        TrackRecorder.discard(context.applicationContext)
                         startRecording()
                     }) { Text("Discard, record new") }
                     TextButton(onClick = {
@@ -1519,9 +1525,7 @@ private fun MapMenu(
 private fun StatusLine(
     geo: GeoReference?,
     location: Location?,
-    myLatLon: LatLon?,
     onMap: Boolean,
-    stale: Boolean,
     fixAgeSeconds: Double?,
     hasPermission: Boolean,
     locationOn: Boolean,
@@ -1530,6 +1534,8 @@ private fun StatusLine(
     onRequestPermission: () -> Unit,
     onOpenLocationSettings: () -> Unit,
 ) {
+    val myLatLon = location?.let { LatLon(it.latitude, it.longitude) }
+    val stale = fixAgeSeconds != null && fixAgeSeconds > STALE_FIX_SECONDS
     val text: String
     var action: (() -> Unit)? = null
     var actionLabel = "Allow"
@@ -1976,8 +1982,6 @@ private val IMPORT_TYPES = arrayOf(
 
 private const val RECORDING_ID = "__recording"
 private const val STALE_FIX_SECONDS = 30
-
-private fun normalizeDegrees(d: Float): Float = ((d % 360f) + 540f) % 360f - 180f
 
 /** Height of the bottom panel's content in every mode (toolbar, adding, navigating, search). */
 private val PANEL_HEIGHT = 112.dp

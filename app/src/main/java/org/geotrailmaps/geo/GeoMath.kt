@@ -22,6 +22,31 @@ const val EARTH_RADIUS_M = 6371008.8
 private fun Double.rad() = this * PI / 180.0
 private fun Double.deg() = this * 180.0 / PI
 
+/**
+ * Ray-casting test of whether (x, y) is inside the polygon of [n] vertices whose
+ * coordinates are [xAt] and [yAt].
+ */
+inline fun pointInPolygon(x: Double, y: Double, n: Int, xAt: (Int) -> Double, yAt: (Int) -> Double): Boolean {
+    var inside = false
+    var j = n - 1
+    for (i in 0 until n) {
+        val ax = xAt(i); val ay = yAt(i); val bx = xAt(j); val by = yAt(j)
+        if ((ay > y) != (by > y) && x < (bx - ax) * (y - ay) / (by - ay) + ax) inside = !inside
+        j = i
+    }
+    return inside
+}
+
+/** Parameter (0..1) along segment a–b of the point on it closest to (x, y). */
+fun closestOnSegment(x: Double, y: Double, ax: Double, ay: Double, bx: Double, by: Double): Double {
+    val dx = bx - ax; val dy = by - ay
+    val len2 = dx * dx + dy * dy
+    return if (len2 == 0.0) 0.0 else (((x - ax) * dx + (y - ay) * dy) / len2).coerceIn(0.0, 1.0)
+}
+
+/** An angle wrapped into -180..180 degrees. */
+fun normalizeDegrees(d: Float): Float = ((d % 360f) + 540f) % 360f - 180f
+
 object Geodesy {
     fun distance(a: LatLon, b: LatLon): Double {
         val dLat = (b.lat - a.lat).rad()

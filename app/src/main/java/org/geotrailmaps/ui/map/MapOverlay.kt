@@ -17,6 +17,7 @@ import org.geotrailmaps.geo.GeoReference
 import org.geotrailmaps.geo.Geodesy
 import org.geotrailmaps.geo.LatLon
 import org.geotrailmaps.geo.TrailRoute
+import org.geotrailmaps.geo.pointInPolygon
 import org.geotrailmaps.ui.theme.MapStyle
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -172,20 +173,13 @@ fun DrawScope.drawTrailInProgress(points: List<TrailPoint>, proj: MapProjection)
 /** The position dot; [stale] when the last fix is old (grey, no accuracy circle or heading). */
 fun DrawScope.drawLocation(location: LatLon, accuracyMeters: Float?, headingDeg: Float?, proj: MapProjection, stale: Boolean = false) {
     val c = proj.toScreen(location)
-    if (stale) {
-        val r = MapStyle.locationDotRadius.toPx()
-        drawCircle(Color.Black.copy(alpha = 0.2f), r + 4f * density, c)
-        drawCircle(MapStyle.locationDotBorder, r + 2.5f * density, c)
-        drawCircle(MapStyle.locationStale, r, c)
-        return
-    }
-    if (accuracyMeters != null && accuracyMeters > 0) {
+    if (!stale && accuracyMeters != null && accuracyMeters > 0) {
         val edge = proj.toScreen(Geodesy.destination(location, 90.0, accuracyMeters.toDouble()))
         val radius = hypot(edge.x - c.x, edge.y - c.y)
         drawCircle(MapStyle.locationAccuracy, radius, c)
         drawCircle(MapStyle.locationDot.copy(alpha = 0.4f), radius, c, style = Stroke(1f * density))
     }
-    if (headingDeg != null) {
+    if (!stale && headingDeg != null) {
         // Direction on screen, which accounts for the map not being north-up.
         val ahead = proj.toScreen(Geodesy.destination(location, headingDeg.toDouble(), 50.0))
         val angle = atan2(ahead.y - c.y, ahead.x - c.x)
@@ -202,7 +196,7 @@ fun DrawScope.drawLocation(location: LatLon, accuracyMeters: Float?, headingDeg:
     val r = MapStyle.locationDotRadius.toPx()
     drawCircle(Color.Black.copy(alpha = 0.2f), r + 4f * density, c)
     drawCircle(MapStyle.locationDotBorder, r + 2.5f * density, c)
-    drawCircle(MapStyle.locationDot, r, c)
+    drawCircle(if (stale) MapStyle.locationStale else MapStyle.locationDot, r, c)
 }
 
 /** Aiming crosshair for placing a placemark, with a casing so it shows on any background. */
@@ -230,12 +224,12 @@ private fun pathOf(pts: List<Offset>, close: Boolean) = Path().apply {
 /** Finds the feature under a tap, preferring pins. */
 fun hitTest(features: List<Feature>, tap: Offset, geometry: FeatureGeometry, viewport: MapViewport, density: Float, pinHeightPx: Float): Feature? {
     val touch = 24f * density
-    fun screen(shape: FeatureGeometry.Shape) = List(shape.xy.size / 2) { i ->
-        Offset(shape.xy[2 * i] * viewport.scale + viewport.offset.x, shape.xy[2 * i + 1] * viewport.scale + viewport.offset.y)
-    }
+    val s = viewport.scale
+    val o = viewport.offset
     features.filter { it.type == FeatureType.POINT }
         .map { f ->
-            val tip = screen(geometry.shape(f)).first()
+            val xy = geometry.shape(f).xy
+            val tip = Offset(xy[0] * s + o.x, xy[1] * s + o.y)
             // Pins are drawn upright on screen, so in view space their head turns with the map.
             val head = tip + rotateBy(Offset(0f, -pinHeightPx), -viewport.rotation)
             f to minOf(distanceToSegment(tap, tip, head), (tap - head).getDistance())
@@ -246,8 +240,6 @@ fun hitTest(features: List<Feature>, tap: Offset, geometry: FeatureGeometry, vie
 
     // Lines and areas: skip shapes whose bounds are away from the tap, then test segments
     // straight from the cached coordinates (no per-point allocation for long tracks).
-    val s = viewport.scale
-    val o = viewport.offset
     val reach = touch * 0.75f
     return features.filter { it.type != FeatureType.POINT }.lastOrNull { f ->
         val shape = geometry.shape(f)
@@ -264,7 +256,7 @@ fun hitTest(features: List<Feature>, tap: Offset, geometry: FeatureGeometry, vie
                 Offset(xy[2 * i] * s + o.x, xy[2 * i + 1] * s + o.y),
                 Offset(xy[2 * j] * s + o.x, xy[2 * j + 1] * s + o.y),
             ) < reach
-        } || (f.type == FeatureType.AREA && insidePolygon(tap, screen(shape)))
+        } || (f.type == FeatureType.AREA && pointInPolygon(tap.x.toDouble(), tap.y.toDouble(), n, { (xy[2 * it] * s + o.x).toDouble() }, { (xy[2 * it + 1] * s + o.y).toDouble() }))
     }
 }
 
@@ -273,16 +265,4 @@ internal fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
     val len2 = ab.x * ab.x + ab.y * ab.y
     val t = if (len2 == 0f) 0f else (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).coerceIn(0f, 1f)
     return (p - (a + ab * t)).getDistance()
-}
-
-private fun insidePolygon(p: Offset, poly: List<Offset>): Boolean {
-    var inside = false
-    var j = poly.size - 1
-    for (i in poly.indices) {
-        val a = poly[i]
-        val b = poly[j]
-        if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside
-        j = i
-    }
-    return inside
 }

@@ -52,8 +52,6 @@ class PdfFile private constructor(private val buf: ByteBuffer) {
     var trailer: Map<String, Any?> = emptyMap()
         private set
 
-    val isEncrypted: Boolean get() = trailer["Encrypt"] != null
-
     // ---------------------------------------------------------------- objects
 
     fun resolve(obj: Any?): Any? = if (obj is PdfRef) getObject(obj.num) else obj

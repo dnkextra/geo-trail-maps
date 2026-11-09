@@ -130,10 +130,8 @@ class TrailNetwork(lines: List<List<LatLon>>) {
 
     /** Parameter along a–b of the point closest to (x, y), and its distance. */
     private fun closest(x: Double, y: Double, a: Int, b: Int): Pair<Double, Double> {
-        val dx = xs[b] - xs[a]; val dy = ys[b] - ys[a]
-        val len2 = dx * dx + dy * dy
-        val t = if (len2 == 0.0) 0.0 else (((x - xs[a]) * dx + (y - ys[a]) * dy) / len2).coerceIn(0.0, 1.0)
-        return t to hypot(xs[a] + t * dx - x, ys[a] + t * dy - y)
+        val t = closestOnSegment(x, y, xs[a], ys[a], xs[b], ys[b])
+        return t to hypot(xs[a] + t * (xs[b] - xs[a]) - x, ys[a] + t * (ys[b] - ys[a]) - y)
     }
 
     /** A position on the network: [point], [distance] metres from where it was asked for. */

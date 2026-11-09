@@ -33,7 +33,7 @@ data class Feature(
     /** The points split where a track was paused or continued from elsewhere; one list for anything else. */
     val segments: List<List<LatLon>>
         get() {
-            val starts = track?.segmentStarts.orEmpty().filter { it in 1 until points.size }.distinct().sorted()
+            val starts = track?.segmentStarts(points.size).orEmpty()
             if (type != FeatureType.LINE || starts.isEmpty()) return listOf(points)
             return (listOf(0) + starts + points.size).zipWithNext { a, b -> points.subList(a, b) }
         }
@@ -61,9 +61,12 @@ data class TrackData(
     /** Indices of points that begin a new segment (after a pause with movement); empty for one segment. */
     val segmentStarts: List<Int> = emptyList(),
 ) {
+    /** [segmentStarts] that are valid for [size] points: in range, ascending, no repeats. */
+    fun segmentStarts(size: Int): List<Int> = segmentStarts.filter { it in 1 until size }.distinct().sorted()
+
     /** Recording time to resume from: the stored moving time, else the span of the timestamps in each segment. */
     val resumeMillis: Long
-        get() = durationMillis ?: (listOf(0) + segmentStarts.filter { it in 1 until times.size }.distinct().sorted() + times.size)
+        get() = durationMillis ?: (listOf(0) + segmentStarts(times.size) + times.size)
             .zipWithNext { a, b -> times.subList(a, b).filterNotNull().let { if (it.size >= 2) it.last() - it.first() else 0L } }
             .sum()
 }
@@ -110,4 +113,16 @@ data class MapFeatures(
     val layers: List<FeatureLayer> = emptyList(),
     val features: List<Feature> = emptyList(),
     val hiddenGlobal: Set<String> = emptySet(),
-)
+) {
+    fun withFeature(id: String, edit: (Feature) -> Feature) = copy(features = features.map { if (it.id == id) edit(it) else it })
+    fun withLayer(id: String, edit: (FeatureLayer) -> FeatureLayer) = copy(layers = layers.map { if (it.id == id) edit(it) else it })
+
+    /** Replaces the feature with [feature]'s id, or adds it. */
+    fun upsert(feature: Feature) =
+        if (features.any { it.id == feature.id }) withFeature(feature.id) { feature } else copy(features = features + feature)
+
+    fun removeFeature(id: String) = copy(features = features.filter { it.id != id })
+
+    /** Removes a layer and its features. */
+    fun removeLayer(id: String) = copy(layers = layers.filter { it.id != id }, features = features.filter { it.layerId != id })
+}

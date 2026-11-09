@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -252,16 +251,7 @@ fun MapListScreen(
     }
 
     renaming?.let { map ->
-        var name by remember(map.id) { mutableStateOf(map.name) }
-        AlertDialog(
-            onDismissRequest = { renaming = null },
-            title = { Text("Rename map") },
-            text = { OutlinedTextField(name, { name = it }, singleLine = true) },
-            confirmButton = {
-                TextButton(enabled = name.isNotBlank(), onClick = { onRename(map.id, name.trim()); renaming = null }) { Text("Rename") }
-            },
-            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
-        )
+        RenameDialog("Rename map", map.name, onRename = { onRename(map.id, it); renaming = null }, onDismiss = { renaming = null })
     }
 
     moving?.let { map ->
@@ -303,25 +293,15 @@ fun MapListScreen(
 
     deleting?.let { map ->
         val orphans = remember(map.id) { onlyOnMap(map.id) }
-        AlertDialog(
-            onDismissRequest = { deleting = null },
-            title = { Text("Delete map?") },
-            text = {
-                Text(
-                    "\"${map.name}\" and its placemarks will be removed from this device." + when (orphans) {
-                        0 -> ""
-                        1 -> " 1 item from Tracks is only on this map. It will stay in Tracks."
-                        else -> " $orphans items from Tracks are only on this map. They'll stay in Tracks."
-                    },
-                )
+        ConfirmDeleteDialog(
+            title = "Delete map?",
+            text = "\"${map.name}\" and its placemarks will be removed from this device." + when (orphans) {
+                0 -> ""
+                1 -> " 1 item from Tracks is only on this map. It will stay in Tracks."
+                else -> " $orphans items from Tracks are only on this map. They'll stay in Tracks."
             },
-            confirmButton = {
-                TextButton(
-                    onClick = { onDelete(map.id); deleting = null },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) { Text("Delete") }
-            },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+            onDelete = { onDelete(map.id); deleting = null },
+            onDismiss = { deleting = null },
         )
     }
 }

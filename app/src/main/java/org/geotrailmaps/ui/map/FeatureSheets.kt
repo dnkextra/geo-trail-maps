@@ -88,7 +88,6 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -108,6 +107,8 @@ import org.geotrailmaps.data.Trails
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.geo.Geodesy
 import org.geotrailmaps.geo.LatLon
+import org.geotrailmaps.ui.ConfirmDeleteDialog
+import org.geotrailmaps.ui.RenameDialog
 import org.geotrailmaps.ui.theme.MapStyle
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -141,14 +142,14 @@ fun FeatureEditSheet(
     format: CoordinateFormat,
     /** Name of the imported layer the feature belongs to, if any. */
     layerName: String?,
-    /** Start navigating to this placemark; null hides the button. */
-    onNavigate: (() -> Unit)?,
+    /** Start navigating to this placemark. */
+    onNavigate: () -> Unit,
     /** Record more onto this track; null hides the button. */
-    onContinueTrack: (() -> Unit)? = null,
+    onContinueTrack: (() -> Unit)?,
     /** For lines: whether its layer already makes it a trail. */
-    trailByLayer: Boolean = false,
+    trailByLayer: Boolean,
     /** For lines: use it for trail distance by itself, or stop; null hides the switch. */
-    onTrail: ((Boolean) -> Unit)? = null,
+    onTrail: ((Boolean) -> Unit)?,
     onSave: (Feature) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -198,7 +199,7 @@ fun FeatureEditSheet(
                                 .background(c, CircleShape)
                                 .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
                         )
-                        if (selected) Icon(Icons.Filled.Check, null, tint = if (c.luminance() > 0.5f) Color.Black else Color.White)
+                        if (selected) Icon(Icons.Filled.Check, null, tint = contentColorOn(c))
                     }
                 }
             }
@@ -242,7 +243,7 @@ fun FeatureEditSheet(
                     Text("Delete")
                 }
                 Spacer(Modifier.weight(1f))
-                if (onNavigate != null && feature.type == FeatureType.POINT) {
+                if (feature.type == FeatureType.POINT) {
                     OutlinedButton(onClick = { close(); onNavigate() }) {
                         Icon(Icons.Filled.Navigation, null, Modifier.size(18.dp))
                         Spacer(Modifier.size(6.dp))
@@ -309,7 +310,7 @@ fun FeatureListSheet(
     val transparent = ListItemDefaults.colors(containerColor = Color.Transparent)
 
     @Composable
-    fun FeatureRow(f: Feature, indent: Boolean, layerVisible: Boolean = true) {
+    fun FeatureRow(f: Feature, layerVisible: Boolean = true) {
         val distance = if (f.type == FeatureType.POINT && myLocation != null) {
             Formats.distance(Geodesy.distance(myLocation, f.points.first()), units) + " away"
         } else null
@@ -340,7 +341,7 @@ fun FeatureListSheet(
                         CheckboxDefaults.colors(
                             checkedColor = c,
                             uncheckedColor = MaterialTheme.colorScheme.outline,
-                            checkmarkColor = if (c.luminance() > 0.5f) Color.Black else Color.White,
+                            checkmarkColor = contentColorOn(c),
                         )
                     },
                     modifier = Modifier.semantics { contentDescription = "Show ${f.name}" },
@@ -356,7 +357,7 @@ fun FeatureListSheet(
             },
             modifier = Modifier
                 .clickable(onClickLabel = "Edit") { actions.onEdit(f) }
-                .padding(start = if (indent) 12.dp else 0.dp),
+                .padding(start = 12.dp),
         )
     }
 
@@ -411,7 +412,7 @@ fun FeatureListSheet(
                         .semantics { stateDescription = if (mineOpen) "Expanded" else "Collapsed" },
                 )
             }
-            if (mineOpen) items(mine, key = { it.id }) { FeatureRow(it, indent = true) }
+            if (mineOpen) items(mine, key = { it.id }) { FeatureRow(it) }
             for (layer in layers) {
                 val items = byLayer[layer.id].orEmpty()
                 val open = expanded[layer.id] == true
@@ -442,7 +443,7 @@ fun FeatureListSheet(
                                     CheckboxDefaults.colors(
                                         checkedColor = c,
                                         uncheckedColor = c,
-                                        checkmarkColor = if (c.luminance() > 0.5f) Color.Black else Color.White,
+                                        checkmarkColor = contentColorOn(c),
                                     )
                                 },
                                 modifier = Modifier.semantics { contentDescription = "Show ${layer.name}" },
@@ -501,7 +502,7 @@ fun FeatureListSheet(
                             .semantics { stateDescription = if (open) "Expanded" else "Collapsed" },
                     )
                 }
-                if (open) items(items, key = { it.id }) { FeatureRow(it, indent = true, layerVisible = layer.visible) }
+                if (open) items(items, key = { it.id }) { FeatureRow(it, layerVisible = layer.visible) }
             }
         }
     }
@@ -575,16 +576,7 @@ fun FeatureListSheet(
     }
 
     renaming?.let { layer ->
-        var name by remember(layer.id) { mutableStateOf(layer.name) }
-        AlertDialog(
-            onDismissRequest = { renaming = null },
-            title = { Text("Rename layer") },
-            text = { OutlinedTextField(name, { name = it }, singleLine = true) },
-            confirmButton = {
-                TextButton(enabled = name.isNotBlank(), onClick = { actions.onRenameLayer(layer, name.trim()); renaming = null }) { Text("Rename") }
-            },
-            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
-        )
+        RenameDialog("Rename layer", layer.name, onRename = { actions.onRenameLayer(layer, it); renaming = null }, onDismiss = { renaming = null })
     }
 
     choosingTrails?.let { layer ->
@@ -639,19 +631,12 @@ fun FeatureListSheet(
     }
 
     deleting?.let { (question, apply) ->
-        AlertDialog(
-            onDismissRequest = { deleting = null },
-            title = { Text(question) },
-            confirmButton = {
-                TextButton(
-                    onClick = { apply(); deleting = null },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) { Text("Delete") }
-            },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
-        )
+        ConfirmDeleteDialog(title = question, onDelete = { apply(); deleting = null }, onDismiss = { deleting = null })
     }
 }
+
+/** Black or white, whichever reads better on [c]. */
+private fun contentColorOn(c: Color) = if (c.luminance() > 0.5f) Color.Black else Color.White
 
 internal fun countText(n: Int) = if (n == 1) "1 item" else "$n items"
 

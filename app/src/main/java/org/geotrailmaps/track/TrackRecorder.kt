@@ -92,8 +92,9 @@ object TrackRecorder {
         if (!f.isFile || _state.value.status != Status.IDLE) return
         // A write cut short by the app being killed can leave a partial last line: end it, so
         // later appends start on a fresh line (replay skips the broken one).
-        runCatching { if (f.length() > 0 && !f.readText().endsWith("\n")) f.appendText("\n") }
-        runCatching { replay(f.readLines()) }
+        val text = runCatching { f.readText() }.getOrNull() ?: return
+        if (text.isNotEmpty() && !text.endsWith("\n")) runCatching { f.appendText("\n") }
+        runCatching { replay(text.lines()) }
         recovered = _state.value.status != Status.IDLE
         if (recovered) PausedNotification.show(context.applicationContext)
     }
@@ -136,7 +137,7 @@ object TrackRecorder {
                 points = from.points,
                 times = from.points.indices.map { from.track?.times?.getOrNull(it) },
                 elevations = from.points.indices.map { from.track?.elevations?.getOrNull(it) },
-                segmentStarts = from.track?.segmentStarts.orEmpty().filter { it in 1 until from.points.size },
+                segmentStarts = from.track?.segmentStarts(from.points.size).orEmpty(),
                 distance = from.length,
                 ascent = from.track?.ascent ?: 0.0,
                 pastMillis = past,
@@ -220,15 +221,21 @@ object TrackRecorder {
             track = data,
         )
         val job = store.updateGlobal(notify = false) { d ->
-            if (continued != null) d.copy(features = d.features.map { if (it.id == saved.id) saved else it })
+            if (continued != null) d.withFeature(saved.id) { saved }
             else d.copy(layers = if (d.layers.any { it.id == layer.id }) d.layers else listOf(layer) + d.layers, features = d.features + saved)
         }
         clearLogAfter(job, context, track, saved.id)
         return saved
     }
 
+    /** Ends the recording without saving it, and deletes its recovery log. */
+    fun discard(context: Context) {
+        finish(context)
+        clearLog()
+    }
+
     /** Deletes the recovery log now (discarded, or too short to save). */
-    fun clearLog() {
+    private fun clearLog() {
         if (_state.value.status == Status.IDLE) file?.delete()
     }
 

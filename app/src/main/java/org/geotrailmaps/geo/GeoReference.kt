@@ -37,20 +37,7 @@ class GeoReference(
 
     fun toLatLon(p: PagePoint): LatLon = toGroundTransform.map(p.x, p.y).let { projection.inverse(it) }
 
-    fun contains(p: PagePoint): Boolean {
-        // Ray casting point-in-polygon.
-        var inside = false
-        var j = neatline.size - 1
-        for (i in neatline.indices) {
-            val a = neatline[i]
-            val b = neatline[j]
-            if ((a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) {
-                inside = !inside
-            }
-            j = i
-        }
-        return inside
-    }
+    fun contains(p: PagePoint): Boolean = pointInPolygon(p.x, p.y, neatline.size, { neatline[it].x }, { neatline[it].y })
 
     fun contains(p: LatLon): Boolean = contains(toPage(p))
 
@@ -63,11 +50,8 @@ class GeoReference(
         for (i in neatline.indices) {
             val a = neatline[i]
             val b = neatline[(i + 1) % neatline.size]
-            val dx = b.x - a.x
-            val dy = b.y - a.y
-            val len2 = dx * dx + dy * dy
-            val t = if (len2 == 0.0) 0.0 else (((page.x - a.x) * dx + (page.y - a.y) * dy) / len2).coerceIn(0.0, 1.0)
-            val q = PagePoint(a.x + t * dx, a.y + t * dy)
+            val t = closestOnSegment(page.x, page.y, a.x, a.y, b.x, b.y)
+            val q = PagePoint(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y))
             val d = hypot(q.x - page.x, q.y - page.y)
             if (d < bestDist) { bestDist = d; best = q }
         }

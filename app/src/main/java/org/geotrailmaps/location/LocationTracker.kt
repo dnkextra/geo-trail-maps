@@ -21,6 +21,7 @@ import android.view.Surface
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
+import org.geotrailmaps.geo.normalizeDegrees
 
 /**
  * GPS position and compass heading. Uses the platform LocationManager directly, so it
@@ -50,6 +51,21 @@ class LocationTracker(private val context: Context) : LocationListener, SensorEv
     private var running = false
     private var declination = 0f
 
+    /** Whether [heading] is wanted (a map is open): the sensor runs only then, and while started. */
+    var compassWanted = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!running) return
+            if (value) registerCompass() else sensorManager.unregisterListener(this)
+        }
+
+    private fun registerCompass() {
+        sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+        }
+    }
+
     /** Caller must hold a location permission (precise or approximate). */
     @SuppressLint("MissingPermission")
     fun start() {
@@ -62,9 +78,7 @@ class LocationTracker(private val context: Context) : LocationListener, SensorEv
         } catch (e: SecurityException) {
             // Approximate-only permission and no fused provider; compass still works.
         }
-        sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-        }
+        if (compassWanted) registerCompass()
     }
 
     @SuppressLint("MissingPermission")
@@ -125,7 +139,7 @@ class LocationTracker(private val context: Context) : LocationListener, SensorEv
             return
         }
         // Low-pass filter that handles the 359 -> 0 wrap.
-        val delta = ((heading - previous + 540f) % 360f) - 180f
+        val delta = normalizeDegrees(heading - previous)
         if (abs(delta) > 0.5f) _heading.value = (previous + delta * 0.2f + 360f) % 360f
     }
 

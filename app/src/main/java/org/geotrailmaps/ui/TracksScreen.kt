@@ -14,8 +14,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,12 +22,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -148,7 +144,7 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
                 item(key = "layer-${layer.id}") {
                     LayerHeader(layer, inLayer.size) {
                                                 deleting = "Delete \"${layer.name}\" and its ${countText(inLayer.size)} from every map? This can't be undone. Export anything you want to keep first." to {
-                            library.updateGlobal { d -> d.copy(layers = d.layers.filter { it.id != layer.id }, features = d.features.filter { it.layerId != layer.id }) }
+                            library.updateGlobal { it.removeLayer(layer.id) }
                         }
                     }
                 }
@@ -167,7 +163,7 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
                         },
                         onDelete = {
                             deleting = "Delete \"${f.name}\"? This can't be undone." to {
-                                library.updateGlobal { d -> d.copy(features = d.features.filter { it.id != f.id }) }
+                                library.updateGlobal { it.removeFeature(f.id) }
                             }
                         },
                     )
@@ -212,8 +208,7 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
             },
             onDiscard = {
                 showStop = false
-                TrackRecorder.finish(context.applicationContext)
-                TrackRecorder.clearLog()
+                TrackRecorder.discard(context.applicationContext)
                 show("Track discarded.")
             },
             onDismiss = { showStop = false },
@@ -221,33 +216,18 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
     }
 
     renaming?.let { f ->
-        var name by remember(f.id) { mutableStateOf(f.name) }
-        AlertDialog(
-            onDismissRequest = { renaming = null },
-            title = { Text("Rename track") },
-            text = { OutlinedTextField(name, { name = it }, singleLine = true) },
-            confirmButton = {
-                TextButton(enabled = name.isNotBlank(), onClick = {
-                    library.updateGlobal { d -> d.copy(features = d.features.map { if (it.id == f.id) it.copy(name = name.trim()) else it }) }
-                    renaming = null
-                }) { Text("Rename") }
+        RenameDialog(
+            "Rename track", f.name,
+            onRename = { name ->
+                library.updateGlobal { d -> d.withFeature(f.id) { it.copy(name = name) } }
+                renaming = null
             },
-            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
+            onDismiss = { renaming = null },
         )
     }
 
     deleting?.let { (question, apply) ->
-        AlertDialog(
-            onDismissRequest = { deleting = null },
-            text = { Text(question) },
-            confirmButton = {
-                TextButton(
-                    onClick = { apply(); deleting = null },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) { Text("Delete") }
-            },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
-        )
+        ConfirmDeleteDialog(text = question, onDelete = { apply(); deleting = null }, onDismiss = { deleting = null })
     }
 }
 
@@ -271,6 +251,8 @@ private fun TrackRow(
     onExport: (kml: Boolean) -> Unit,
     onDelete: () -> Unit,
 ) {
+    // A sum over every point: not redone each time the screen recomposes (every GPS fix while recording).
+    val length = remember(f.points, f.track) { f.length }
     var menu by remember { mutableStateOf(false) }
     val started = f.track?.times?.firstOrNull { it != null } ?: f.createdAt
     ListItem(
@@ -278,7 +260,7 @@ private fun TrackRow(
         headlineContent = { Text(f.name) },
         supportingContent = {
             Column {
-                Text(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(started)) + " · " + Formats.distance(f.length, units))
+                Text(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(started)) + " · " + Formats.distance(length, units))
                 Text(
                     if (onMap != null) "On \"$onMap\"" else "Not on any map",
                     style = MaterialTheme.typography.bodySmall,
