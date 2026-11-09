@@ -81,8 +81,10 @@ object TrackRecorder {
      */
     private var gap = false
 
-    /** Call once at startup; restores an unfinished track as paused. */
-    /** [library] is only needed to save, so starting the app doesn't wait for it to load. */
+    /**
+     * Call once at startup; restores an unfinished track as paused. [library] is only needed
+     * to save, so starting the app doesn't wait for it to load.
+     */
     fun init(context: Context, library: Lazy<MapLibrary>) {
         this.library = library
         val f = File(context.filesDir, "recording.csv")
@@ -106,14 +108,11 @@ object TrackRecorder {
     fun takeRecoveredFlag(): Boolean = recovered.also { recovered = false }
 
     /** True while the last track's save is being written; its log mustn't be replaced yet. */
-    private val savingState = MutableStateFlow(false)
-    private var saving: Boolean
-        get() = savingState.value
-        set(value) { savingState.value = value }
+    private val saving = MutableStateFlow(false)
 
     /** Waits until the last track's save has been written (or failed: then it's back, paused). */
     suspend fun awaitSaved() {
-        savingState.first { !it }
+        saving.first { !it }
     }
 
     /**
@@ -121,7 +120,7 @@ object TrackRecorder {
      * False (and nothing starts) while the previous track is still being saved.
      */
     fun start(context: Context, from: Feature? = null): Boolean {
-        if (saving) return false
+        if (saving.value) return false
         val now = System.currentTimeMillis()
         altitudeRef = null
         generation++
@@ -244,9 +243,9 @@ object TrackRecorder {
     private fun clearLogAfter(saved: Deferred<Boolean>, context: Context, track: State, featureId: String) {
         val gen = generation
         val app = context.applicationContext
-        saving = true
+        saving.value = true
         cleanupScope.launch {
-            val ok = try { saved.await() } finally { saving = false }
+            val ok = try { saved.await() } finally { saving.value = false }
             if (gen != generation || _state.value.status != Status.IDLE) return@launch
             if (ok) return@launch clearLog()
             _state.value = track.copy(status = Status.PAUSED, continuingId = featureId, pausedAt = System.currentTimeMillis())

@@ -232,7 +232,7 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
             onImport = { picker.launch(arrayOf("application/pdf", "application/octet-stream")) },
             onOpen = { openMapId = it },
             onTracks = { showTracks = true },
-            onlyOnMap = { app.library.onlyOnMap(it).size },
+            onlyOnMap = app.library::onlyOnMap,
             onRename = app.library::rename,
             onDelete = app.library::delete,
             onSavePdf = { map ->

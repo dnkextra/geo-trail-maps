@@ -653,7 +653,7 @@ fun FeatureListSheet(
     }
 }
 
-private fun countText(n: Int) = if (n == 1) "1 item" else "$n items"
+internal fun countText(n: Int) = if (n == 1) "1 item" else "$n items"
 
 /** Compact icon button so a row of actions leaves room for the name. */
 @Composable

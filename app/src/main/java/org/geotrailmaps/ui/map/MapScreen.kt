@@ -12,12 +12,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.runtime.mutableLongStateOf
 import org.geotrailmaps.track.TrackRecorder
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.atan2
-import android.content.Context
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -145,7 +141,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
@@ -155,7 +150,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.geotrailmaps.data.CoordinateFormat
 import org.geotrailmaps.data.Feature
-import org.geotrailmaps.data.FeatureExport
 import org.geotrailmaps.data.FeatureImport
 import org.geotrailmaps.data.FeatureImportException
 import org.geotrailmaps.data.FeatureLayer
@@ -171,8 +165,6 @@ import org.geotrailmaps.data.MapLibrary
 import org.geotrailmaps.data.Settings
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.ui.shareFeatures
-import org.geotrailmaps.data.LatLonBox
-import org.geotrailmaps.data.coverage
 import org.geotrailmaps.data.overlaps
 import org.geotrailmaps.geo.GeoReference
 import org.geotrailmaps.geo.Geodesy
@@ -185,8 +177,6 @@ import org.geotrailmaps.location.LocationTracker
 import org.geotrailmaps.render.BasemapSource
 import org.geotrailmaps.render.BasemapTiles
 import org.geotrailmaps.ui.theme.MapStyle
-import java.io.File
-import java.io.IOException
 
 @Composable
 fun MapScreen(
@@ -298,7 +288,6 @@ private fun MapContent(
     var resumingFar by remember { mutableStateOf<Double?>(null) }
     /** A save waiting for the last batched fixes: Stop/Save mustn't run twice. */
     var savingTrack by remember { mutableStateOf(false) }
-    val coverage = remember(entry) { entry.coverage() }
     LaunchedEffect(recording.status) {
         when (recording.status) {
             // A paused track keeps its controls on maps it recorded on, even with no points there.
@@ -307,14 +296,21 @@ private fun MapContent(
             TrackRecorder.Status.PAUSED -> {}
         }
     }
+    val recordingFeature = remember(recording.points) {
+        Feature(
+            id = RECORDING_ID, type = FeatureType.LINE, name = "", points = recording.points, color = MapStyle.recordingTrack.toArgb(),
+            track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts),
+        )
+    }
+
     /**
      * Recording shows on every map while it runs, but a paused track only on maps it's on:
      * elsewhere it stays out of the way until Track is pressed (see [askingUnfinished]).
      */
     val recordingHere = recording.status == TrackRecorder.Status.RECORDING ||
-        recording.status == TrackRecorder.Status.PAUSED && (entry.id in TrackRecorder.recordedOn || remember(recording.points, coverage) {
+        recording.status == TrackRecorder.Status.PAUSED && (entry.id in TrackRecorder.recordedOn || remember(recordingFeature) {
             // By segment, so a map between two (e.g. under a flight) doesn't count.
-            overlaps(Feature(type = FeatureType.LINE, name = "", points = recording.points, color = 0, track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts)), coverage)
+            overlaps(recordingFeature, session.coverage)
         })
     /** A global layer about to come back to this map only: confirmed first, as other maps lose it. */
     var localizing by remember { mutableStateOf<FeatureLayer?>(null) }
@@ -504,7 +500,7 @@ private fun MapContent(
         val saved = TrackRecorder.stop(context.applicationContext)
         session.geometry?.forget(listOf(RECORDING_ID))
         if (saved == null) return run { showMessage("The track was too short to save.") }
-        if (!overlaps(saved, coverage)) return run { showMessage("Saved \"${saved.name}\" in Tracks.") }
+        if (!overlaps(saved, session.coverage)) return run { showMessage("Saved \"${saved.name}\" in Tracks.") }
         saved.layerId?.let { session.setLayerVisible(it, true) }
         selectedId = saved.id
         editingId = saved.id
@@ -809,13 +805,6 @@ private fun MapContent(
             chromeHidden = false
             viewport.centerOn(geo!!.toPage(p))
         }
-    }
-
-    val recordingFeature = remember(recording.points) {
-        Feature(
-            id = RECORDING_ID, type = FeatureType.LINE, name = "", points = recording.points, color = MapStyle.recordingTrack.toArgb(),
-            track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts),
-        )
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -1370,7 +1359,7 @@ private fun MapContent(
                     val recordingInto = global.features.find { it.id == recording.continuingId }?.layerId == layer.id
                     when {
                         // It would vanish from this map's list, so it couldn't be changed back here.
-                        on && session.features.none { it.layerId == layer.id && overlaps(it, coverage) } ->
+                        on && session.features.none { it.layerId == layer.id && overlaps(it, session.coverage) } ->
                             showMessage("Nothing in \"${layer.name}\" is on this map, so it can't be shown on all maps from here.")
                         on -> scope.launch {
                             if (session.setLayerGlobal(layer.id, true)) showMessage("\"${layer.name}\" now shows on every map it covers.")
@@ -1457,14 +1446,13 @@ private fun MapContent(
     }
 
     if (askingUnfinished) {
-        val paused = recording
         AlertDialog(
             onDismissRequest = { askingUnfinished = false },
             title = { Text("Unfinished track") },
             text = {
                 Text(
-                    "A track (${Formats.distance(paused.distance, units)}) was paused " +
-                        DateUtils.getRelativeTimeSpanString(paused.pausedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS) +
+                    "A track (${Formats.distance(recording.distance, units)}) was paused " +
+                        DateUtils.getRelativeTimeSpanString(recording.pausedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS) +
                         ". Save or discard it to start a new one here. To carry on with it instead, resume it in Tracks.",
                 )
             },

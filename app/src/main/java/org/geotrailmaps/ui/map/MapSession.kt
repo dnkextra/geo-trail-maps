@@ -79,7 +79,7 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
     private var local by mutableStateOf(library.loadFeatures(entry.id))
     /** All the global layers; kept current by [followGlobal] while the map is open. */
     private var global by mutableStateOf(library.global.value)
-    private val coverage = entry.coverage()
+    val coverage = entry.coverage()
 
     suspend fun followGlobal(): Nothing = library.global.collect { global = it }
 

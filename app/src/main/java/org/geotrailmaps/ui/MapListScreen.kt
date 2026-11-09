@@ -112,8 +112,7 @@ fun MapListScreen(
     var moving by remember { mutableStateOf<MapEntry?>(null) }
     var sortMenu by remember { mutableStateOf(false) }
     val recording = TrackRecorder.state.collectAsState().value
-    val recordingStatus = recording.status
-    val recordingActive = recordingStatus != TrackRecorder.Status.IDLE
+    val recordingActive = recording.status != TrackRecorder.Status.IDLE
     var collapsed by rememberSaveable { mutableStateOf(setOf<String>()) }
     // Archived maps start hidden; the section is opened by tapping its header.
     var archiveOpen by rememberSaveable { mutableStateOf(false) }

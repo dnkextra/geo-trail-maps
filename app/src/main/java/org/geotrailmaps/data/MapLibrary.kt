@@ -273,11 +273,11 @@ class MapLibrary(private val context: Context) {
         }
     }
 
-    /** Global features no other georeferenced map shows, which deleting map [id] would leave on no map. */
-    fun onlyOnMap(id: String): List<Feature> {
-        val here = get(id)?.coverage() ?: return emptyList()
+    /** How many global features no other georeferenced map shows, which deleting map [id] would leave on no map. */
+    fun onlyOnMap(id: String): Int {
+        val here = get(id)?.coverage() ?: return 0
         val others = _maps.value.filter { it.id != id }.mapNotNull { it.coverage() }
-        return _global.value.features.filter { f -> overlaps(f, here) && others.none { overlaps(f, it) } }
+        return _global.value.features.count { f -> overlaps(f, here) && others.none { overlaps(f, it) } }
     }
 
     private fun parseFeatures(text: String): MapFeatures {

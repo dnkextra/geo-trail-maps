@@ -58,6 +58,7 @@ import org.geotrailmaps.ui.map.RecordingBar
 import org.geotrailmaps.ui.map.ResumeGapDialog
 import org.geotrailmaps.ui.map.resumeGap
 import org.geotrailmaps.ui.map.StopTrackDialog
+import org.geotrailmaps.ui.map.countText
 import java.text.DateFormat
 import java.util.Date
 
@@ -87,7 +88,9 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
     var saving by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<Feature?>(null) }
     var deleting by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
-    val coverages = remember(maps) { maps.filter { it.geo != null }.mapNotNull { m -> m.coverage()?.let { m to it } } }
+    val coverages = remember(maps) { maps.mapNotNull { m -> m.coverage()?.let { m to it } } }
+
+    val byLayer = remember(global) { global.features.groupBy { it.layerId }.mapValues { (_, v) -> v.sortedByDescending { it.createdAt } } }
 
     fun show(text: String) = scope.launch {
         snackbar.currentSnackbarData?.dismiss()
@@ -141,11 +144,10 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
                 }
             }
             for (layer in global.layers) {
-                val inLayer = global.features.filter { it.layerId == layer.id }.sortedByDescending { it.createdAt }
+                val inLayer = byLayer[layer.id].orEmpty()
                 item(key = "layer-${layer.id}") {
                     LayerHeader(layer, inLayer.size) {
-                        val what = if (inLayer.size == 1) "its 1 item" else "its ${inLayer.size} items"
-                        deleting = "Delete \"${layer.name}\" and $what from every map? This can't be undone. Export anything you want to keep first." to {
+                                                deleting = "Delete \"${layer.name}\" and its ${countText(inLayer.size)} from every map? This can't be undone. Export anything you want to keep first." to {
                             library.updateGlobal { d -> d.copy(layers = d.layers.filter { it.id != layer.id }, features = d.features.filter { it.layerId != layer.id }) }
                         }
                     }
@@ -253,7 +255,7 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
 private fun LayerHeader(layer: FeatureLayer, count: Int, onDelete: () -> Unit) {
     ListItem(
         headlineContent = { Text(layer.name, style = MaterialTheme.typography.titleSmall) },
-        supportingContent = { Text(if (count == 1) "1 item" else "$count items") },
+        supportingContent = { Text(countText(count)) },
         trailingContent = { IconButton(onClick = onDelete) { Icon(Icons.Filled.Delete, "Delete ${layer.name}") } },
     )
 }
