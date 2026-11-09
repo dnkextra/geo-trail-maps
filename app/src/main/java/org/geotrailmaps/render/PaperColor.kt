@@ -65,17 +65,21 @@ private fun channelAlpha(c: Int, p: Int): Float {
 private const val PAPER_TOLERANCE = 3
 
 /**
- * A copy of [bitmap] with the paper removed. [paperAt] gives the paper colour for each
- * pixel, so the map frame and its margins can have different ones.
+ * A copy of [bitmap] with the paper removed. [paperRow] fills in the paper colour for each
+ * pixel of row y, so the map frame and its margins can have different ones.
  */
-fun removePaper(bitmap: Bitmap, paperAt: (x: Int, y: Int) -> Int): Bitmap {
+fun removePaper(bitmap: Bitmap, paperRow: (y: Int, row: IntArray) -> Unit): Bitmap {
     val w = bitmap.width
     val h = bitmap.height
     val pixels = IntArray(w * h)
     bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
-    for (y in 0 until h) for (x in 0 until w) {
-        val i = y * w + x
-        pixels[i] = removePaper(pixels[i], paperAt(x, y))
+    val paper = IntArray(w)
+    for (y in 0 until h) {
+        paperRow(y, paper)
+        for (x in 0 until w) {
+            val i = y * w + x
+            pixels[i] = removePaper(pixels[i], paper[x])
+        }
     }
     return Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
 }

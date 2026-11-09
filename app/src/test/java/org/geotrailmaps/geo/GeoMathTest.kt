@@ -1,6 +1,7 @@
 package org.geotrailmaps.geo
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GeoMathTest {
@@ -64,6 +65,27 @@ class GeoMathTest {
         val n = n0 + 37000.0
         val err = Geodesy.distance(geo.toLatLon(page(e, n)), ground(e, n))
         assert(err < 5.0) { "error $err m" }
+    }
+
+    /** The row crossings decide inside/outside the same way [GeoReference.contains] does. */
+    @Test
+    fun neatlineCrossingsMatchContains() {
+        // A U with a slanted side, so rows cross it four times, and rows and columns at vertex heights.
+        val frame = listOf(
+            PagePoint(10.0, 10.0), PagePoint(40.0, 10.0), PagePoint(40.0, 60.0), PagePoint(60.0, 60.0),
+            PagePoint(60.0, 10.0), PagePoint(90.0, 10.0), PagePoint(95.0, 90.0), PagePoint(10.0, 90.0),
+        )
+        val cps = listOf(LatLon(10.0, -84.0) to PagePoint(0.0, 100.0), LatLon(10.0, -83.9) to PagePoint(100.0, 100.0), LatLon(10.1, -83.9) to PagePoint(100.0, 0.0), LatLon(10.1, -84.0) to PagePoint(0.0, 0.0))
+        val geo = GeoReference(cps, frame, null)
+        var fourCrossings = false
+        for (y in 0..200) for (x in 0..200) {
+            val py = y / 2.0
+            val px = x / 2.0
+            val crossings = geo.neatlineCrossings(py)
+            if (crossings.size == 4) fourCrossings = true
+            assertEquals("($px, $py)", geo.contains(PagePoint(px, py)), crossings.count { it > px } % 2 == 1)
+        }
+        assertTrue(fourCrossings)
     }
 
     @Test

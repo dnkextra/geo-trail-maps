@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.channels.Channel
 import org.geotrailmaps.data.Feature
@@ -82,6 +83,15 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
     val coverage = entry.coverage()
 
     suspend fun followGlobal(): Nothing = library.global.collect { global = it }
+
+    /**
+     * Keeps [geometry] to the features on this map, however they leave it, plus the shapes in
+     * [keep] (not features). Runs while the map is open.
+     */
+    suspend fun pruneGeometry(keep: Set<String>) {
+        val g = geometry ?: return
+        snapshotFlow { features }.collect { list -> g.retain(list.mapTo(HashSet(keep)) { it.id }) }
+    }
 
     /** The global layers and features that overlap this map. */
     private val globalHere by derivedStateOf {
@@ -191,10 +201,17 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
     private fun paperFree(region: RenderedRegion, colors: Pair<Int, Int>): android.graphics.Bitmap {
         val geo = entry.geo!!
         val (paper, margin) = colors
-        return removePaper(region.bitmap) { x, y ->
-            if (paper == margin) paper
-            else if (geo.contains(PagePoint(region.left + (x + 0.5) / region.scale, region.top + (y + 0.5) / region.scale))) paper
-            else margin
+        return removePaper(region.bitmap) { y, row ->
+            if (paper == margin) return@removePaper row.fill(paper)
+            // Paper where an odd number of frame crossings lie to the right, margin elsewhere:
+            // one walk along the row rather than a point-in-polygon test per pixel.
+            val crossings = geo.neatlineCrossings(region.top + (y + 0.5) / region.scale)
+            var passed = 0
+            for (x in row.indices) {
+                val px = region.left + (x + 0.5) / region.scale
+                while (passed < crossings.size && crossings[passed] <= px) passed++
+                row[x] = if ((crossings.size - passed) % 2 == 1) paper else margin
+            }
         }
     }
 
@@ -203,7 +220,6 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
         change(isGlobal(feature.layerId), notify) { it.upsert(feature) }
 
     fun delete(id: String) {
-        geometry?.forget(listOf(id))
         change(isGlobalFeature(id)) { it.removeFeature(id) }
     }
 
@@ -402,7 +418,6 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
 
     /** Removes a layer together with everything imported in it; a global one from every map. */
     fun deleteLayer(id: String) {
-        geometry?.forget(features.filter { it.layerId == id }.map { it.id })
         change(isGlobal(id)) { it.removeLayer(id) }
     }
 

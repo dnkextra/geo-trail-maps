@@ -41,6 +41,22 @@ class GeoReference(
 
     fun contains(p: LatLon): Boolean = contains(toPage(p))
 
+    /**
+     * Where the page row at height [y] crosses the neatline, ascending: a point on the row is
+     * on the map when an odd number of crossings lie to its right (as [contains] decides).
+     */
+    fun neatlineCrossings(y: Double): DoubleArray {
+        val xs = ArrayList<Double>(4)
+        var j = neatline.size - 1
+        for (i in neatline.indices) {
+            val a = neatline[i]
+            val b = neatline[j]
+            if ((a.y > y) != (b.y > y)) xs += (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x
+            j = i
+        }
+        return xs.toDoubleArray().apply { sort() }
+    }
+
     /** The point of the map area nearest to [p] (p itself when it lies on the map). */
     fun nearestPointOnMap(p: LatLon): LatLon {
         val page = toPage(p)

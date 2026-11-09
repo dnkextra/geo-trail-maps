@@ -296,7 +296,11 @@ private fun MapContent(
         when (recording.status) {
             // A paused track keeps its controls on maps it recorded on, even with no points there.
             TrackRecorder.Status.RECORDING -> TrackRecorder.recordedOn += entry.id
-            TrackRecorder.Status.IDLE -> { showStopTrack = false; askingUnfinished = false; resumingFar = null } // stopped from the notification
+            TrackRecorder.Status.IDLE -> {
+                showStopTrack = false; askingUnfinished = false; resumingFar = null // stopped from the notification
+                // Saved, discarded or stopped elsewhere: the live line's shape isn't a feature, so pruning misses it.
+                session.geometry?.forget(RECORDING_ID)
+            }
             TrackRecorder.Status.PAUSED -> {}
         }
     }
@@ -397,6 +401,8 @@ private fun MapContent(
 
     LaunchedEffect(session) { session.renderBase() }
     LaunchedEffect(session) { session.followGlobal() }
+    // The live line keeps its shape, so only new points are projected (it's forgotten once recording stops).
+    LaunchedEffect(session) { session.pruneGeometry(keep = setOf(RECORDING_ID)) }
     LaunchedEffect(session) { session.renderTiles() }
     // Built ahead once the map shows, so measuring along trails is ready when it's first used.
     LaunchedEffect(session, session.trailLines) {
@@ -528,7 +534,6 @@ private fun MapContent(
     /** Saves the recording (see [TrackRecorder.stop]) and opens it, if it's on this map. */
     fun saveTrack() {
         val saved = TrackRecorder.stop(context.applicationContext)
-        session.geometry?.forget(listOf(RECORDING_ID))
         if (saved == null) return run { showMessage("The track was too short to save.") }
         if (!overlaps(saved, session.coverage)) return run { showMessage("Saved \"${saved.name}\" in Tracks.") }
         saved.layerId?.let { session.setLayerVisible(it, true) }
@@ -1417,7 +1422,6 @@ private fun MapContent(
             onDiscard = {
                 showStopTrack = false
                 TrackRecorder.discard(context.applicationContext)
-                session.geometry?.forget(listOf(RECORDING_ID))
                 showMessage("Track discarded.")
             },
             onDismiss = { showStopTrack = false },
