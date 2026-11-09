@@ -50,7 +50,7 @@ data class MapEntry(
     val seeThrough: Float = 0f,
     /**
      * The background map chosen for this map: a [org.geotrailmaps.render.BasemapSource] name, or
-     * [NO_BASEMAP]; null until one is chosen (the last one chosen on any map is used).
+     * [NO_BASEMAP]; null until one is chosen (the default from Settings is used).
      */
     val basemap: String? = null,
     /** Moved to the Archived section at the bottom of My Maps, out of the way. */

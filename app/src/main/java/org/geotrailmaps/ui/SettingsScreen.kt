@@ -6,10 +6,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import org.geotrailmaps.data.CoordinateFormat
@@ -39,6 +42,7 @@ import org.geotrailmaps.render.BasemapSource
 @Composable
 fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
     var showLicenses by rememberSaveable { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
     if (showLicenses) {
         LicensesScreen(onBack = { showLicenses = false })
         return
@@ -46,6 +50,7 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val format by settings.coordinateFormat.collectAsState()
     val units by settings.units.collectAsState()
+    val defaultBasemap by settings.defaultBasemap.collectAsState()
     val example = LatLon(49.2827, -123.1207)
 
     Scaffold(
@@ -58,18 +63,34 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
     ) { padding ->
         Column(Modifier.padding(padding).verticalScroll(rememberScrollState())) {
             SectionTitle("Coordinate format")
-            for (f in CoordinateFormat.entries) {
-                Choice(f.label, Formats.coordinate(example, f), selected = f == format) { settings.setCoordinateFormat(f) }
+            Column(Modifier.selectableGroup()) {
+                for (f in CoordinateFormat.entries) {
+                    Choice(f.label, Formats.coordinate(example, f), selected = f == format) { settings.setCoordinateFormat(f) }
+                }
             }
             SectionTitle("Units")
-            for (u in Units.entries) {
-                Choice(u.label, Formats.distance(1234.0, u), selected = u == units) { settings.setUnits(u) }
+            Column(Modifier.selectableGroup()) {
+                for (u in Units.entries) {
+                    Choice(u.label, Formats.distance(1234.0, u), selected = u == units) { settings.setUnits(u) }
+                }
             }
+            SectionTitle("Background map for new maps")
+            Column(Modifier.selectableGroup()) {
+                Choice("None", "New maps show no background", selected = defaultBasemap == null) { settings.setDefaultBasemap(null) }
+                for (b in BasemapSource.entries) {
+                    Choice(b.label, "Downloads tiles from ${b.host}", selected = b == defaultBasemap) { settings.setDefaultBasemap(b) }
+                }
+            }
+            Text(
+                "Used the first time you open a map. Maps you've already opened keep their own; change those under Layers.",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
             SectionTitle("About")
             Text(
                 "Opens geospatial PDF maps (GeoPDFs), the format Avenza Maps imports and exports. Files in Avenza's own " +
                     ".avenzamap format are encrypted and can only be opened in Avenza Maps.\n\n" +
-                    "The background map (chosen under Layers on any map) uses OpenStreetMap tiles, ${BasemapSource.OSM.credit}, " +
+                    "The background map (default above, or under Layers on any map) uses OpenStreetMap tiles, ${BasemapSource.OSM.credit}, " +
                     "or satellite imagery: ${BasemapSource.SATELLITE.credit}, licensed CC BY-NC-SA 4.0 for noncommercial use. " +
                     "Tiles are downloaded when online and cached; requests reveal the area you're viewing to the tile provider " +
                     "(openstreetmap.org or eox.at).",
@@ -81,6 +102,12 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                 supportingContent = { Text("License and notices for this app and its components") },
                 trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
                 modifier = Modifier.clickable { showLicenses = true },
+            )
+            ListItem(
+                headlineContent = { Text("Privacy policy") },
+                supportingContent = { Text("Opens on GitHub") },
+                trailingContent = { Icon(Icons.AutoMirrored.Filled.OpenInNew, null) },
+                modifier = Modifier.clickable { uriHandler.openUri(PRIVACY_POLICY_URL) },
             )
             SectionTitle("Your data")
             Text(
@@ -113,3 +140,5 @@ private fun Choice(title: String, example: String, selected: Boolean, onClick: (
         modifier = Modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
     )
 }
+
+private const val PRIVACY_POLICY_URL = "https://github.com/dnkextra/geo-trail-maps/blob/main/PRIVACY.md"

@@ -255,10 +255,10 @@ private fun MapContent(
     val openLocationSettings = { context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
     val format by settings.coordinateFormat.collectAsState()
     val units by settings.units.collectAsState()
-    // Each map keeps its own background; one opened before it had a choice gets the last one chosen.
-    val lastBasemap by settings.basemap.collectAsState()
-    LaunchedEffect(session) { if (session.basemapChoice == null) session.setBasemap(lastBasemap) }
-    val basemapSource = if (session.basemapChoice == null) lastBasemap else session.basemap
+    // Each map keeps its own background; one opened before it had a choice gets the default from Settings.
+    val defaultBasemap by settings.defaultBasemap.collectAsState()
+    LaunchedEffect(session) { if (session.basemapChoice == null) session.setBasemap(defaultBasemap) }
+    val basemapSource = if (session.basemapChoice == null) defaultBasemap else session.basemap
     // The tile credit shows on the map for a few seconds whenever the background map appears,
     // then fades; it stays in the layer list.
     var showCredit by remember { mutableStateOf(false) }
@@ -1386,10 +1386,7 @@ private fun MapContent(
                     if (!visible && session.features.any { it.layerId == layer.id && it.id == selectedId }) selectedId = null
                     session.setLayerVisible(layer.id, visible)
                 },
-                onBasemap = { source ->
-                    // Also for maps opened later that haven't chosen yet.
-                    if (session.setBasemap(source)) settings.setBasemap(source)
-                },
+                onBasemap = { session.setBasemap(it) },
                 onSeeThrough = { session.seeThrough = it },
                 onSeeThroughDone = session::saveSeeThrough,
                 onFeatureVisible = { f, visible ->

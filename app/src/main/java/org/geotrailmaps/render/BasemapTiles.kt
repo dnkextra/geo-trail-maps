@@ -88,6 +88,9 @@ enum class BasemapSource(
         SATELLITE -> "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/${t.z}/${t.y}/${t.x}.jpg"
     }
 
+    /** The server tiles are downloaded from, for privacy disclosures. */
+    val host: String get() = url(Tile(0, 0, 0)).substringAfter("://").substringBefore('/')
+
     fun cacheFile(root: File, t: Tile) = File(root, "$cacheDir/${t.z}/${t.x}/${t.y}." + url(t).substringAfterLast('.'))
 }
 

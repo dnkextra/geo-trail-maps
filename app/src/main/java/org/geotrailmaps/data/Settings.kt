@@ -17,22 +17,23 @@ class Settings(context: Context) {
     private val _units = MutableStateFlow(enumOrDefault(prefs.getString("units", null), Units.METRIC))
     val units: StateFlow<Units> = _units
 
-    // Before 0.5 this was an on/off switch for OpenStreetMap ("basemap").
-    private val _basemap = MutableStateFlow(
+    // Before 0.5 this was an on/off switch for OpenStreetMap ("basemap"). Before 0.9.2 it was the
+    // background chosen last on any map, so that choice carries over as the default.
+    private val _defaultBasemap = MutableStateFlow(
         when (val name = prefs.getString("basemapSource", null)) {
             null -> if (prefs.getBoolean("basemap", true)) BasemapSource.OSM else null
             else -> BasemapSource.entries.firstOrNull { it.name == name }
         },
     )
     /**
-     * The background map chosen last (null = none): what a map gets the first time it's
+     * The background map set in Settings (null = none): what a map gets the first time it's
      * opened. After that each map keeps its own ([MapEntry.basemap]).
      */
-    val basemap: StateFlow<BasemapSource?> = _basemap
+    val defaultBasemap: StateFlow<BasemapSource?> = _defaultBasemap
 
-    fun setBasemap(value: BasemapSource?) {
+    fun setDefaultBasemap(value: BasemapSource?) {
         prefs.edit { putString("basemapSource", value?.name ?: "NONE") }
-        _basemap.value = value
+        _defaultBasemap.value = value
     }
 
     /** Whether the "tap to show controls" hint has been shown once. */
