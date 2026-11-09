@@ -68,8 +68,10 @@ enum class BasemapSource(
     /** Deeper zooms are drawn by enlarging tiles from this level. */
     val maxZoom: Int,
     private val cacheDir: String,
+    /** Cached tiles older than this are re-checked with the server; null for imagery that never changes. */
+    val refreshAfterDays: Int?,
 ) {
-    OSM("OpenStreetMap", "© OpenStreetMap contributors", "© OpenStreetMap contributors", "https://www.openstreetmap.org/copyright", Tile.MAX_ZOOM, "tiles"),
+    OSM("OpenStreetMap", "© OpenStreetMap contributors", "© OpenStreetMap contributors", "https://www.openstreetmap.org/copyright", Tile.MAX_ZOOM, "tiles", 90),
     // Sentinel-2 imagery is 10 m per pixel: zoom 15 is already enlarged on the server.
     SATELLITE(
         "Satellite",
@@ -78,6 +80,7 @@ enum class BasemapSource(
         "https://s2maps.eu",
         15,
         "tiles-s2cloudless-2025",
+        null,
     );
 
     fun url(t: Tile) = when (this) {
@@ -104,12 +107,18 @@ class BasemapTiles(context: Context) {
     /** The latest visible set; queued tiles that have scrolled away are skipped. */
     @Volatile private var wanted: Set<Key> = emptySet()
     private val failedAt = HashMap<Key, Long>()
+    /** Old cached tiles being re-checked; see [refresh]. */
+    private val refreshing = HashSet<Key>()
+    /** Missing tiles queued or downloading; refreshes wait for these. */
+    private var downloading = 0
 
     // The OSM tile policy asks clients to keep to two connections. Cached tiles have their own
     // workers, so they don't wait behind slow downloads.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val disk = Dispatchers.IO.limitedParallelism(2)
     private val network = Dispatchers.IO.limitedParallelism(2)
+    /** One refresh at a time, so missing tiles never queue behind more than one. */
+    private val refreshNetwork = network.limitedParallelism(1)
 
     var version by mutableIntStateOf(0)
         private set
@@ -138,12 +147,18 @@ class BasemapTiles(context: Context) {
         inFlight += key
         scope.launch {
             var skipped = false
+            var stale = false
             var bitmap = withContext(disk) {
                 if (key !in wanted) { skipped = true; null } else runCatching { readCached(key) }.getOrNull()
+                    ?.also { stale = isStale(key) }
             }
             var downloaded: Result<Bitmap?>? = null
-            if (bitmap == null && !skipped) bitmap = withContext(network) {
-                if (key !in wanted) { skipped = true; null } else runCatching { download(key) }.also { downloaded = it }.getOrNull()
+            if (bitmap == null && !skipped) {
+                downloading++
+                bitmap = withContext(network) {
+                    if (key !in wanted) { skipped = true; null } else runCatching { download(key) }.also { downloaded = it }.getOrNull()
+                }
+                downloading--
             }
             downloaded?.let { r -> if (r.exceptionOrNull() is IOException) offline = true else if (r.getOrNull() != null) offline = false }
             inFlight -= key
@@ -153,6 +168,7 @@ class BasemapTiles(context: Context) {
                 memory.put(key, bitmap)
                 failedAt.remove(key)
                 version++
+                if (stale) refresh(key)
             } else {
                 // Offline or server error: try again later if it's still on screen.
                 failedAt[key] = SystemClock.elapsedRealtime()
@@ -162,18 +178,51 @@ class BasemapTiles(context: Context) {
         }
     }
 
+    /**
+     * Re-downloads a tile that was cached long ago, after any missing tiles, asking the server
+     * to send it only if it changed. The cached tile stays on screen and on disk if not.
+     */
+    private fun refresh(key: Key) {
+        if (!refreshing.add(key)) return
+        scope.launch {
+            while (downloading > 0) delay(REFRESH_WAIT_MS)
+            val result = withContext(refreshNetwork) {
+                if (key !in wanted) null else runCatching { download(key, revalidate = true) }
+            }
+            refreshing -= key
+            if (result == null) return@launch
+            offline = result.exceptionOrNull() is IOException
+            result.getOrNull()?.let {
+                memory.put(key, it)
+                version++
+            }
+        }
+    }
+
+    private fun isStale(key: Key): Boolean {
+        val days = key.source.refreshAfterDays ?: return false
+        val age = System.currentTimeMillis() - key.source.cacheFile(cacheRoot, key.tile).lastModified()
+        return age > days * DAY_MS
+    }
+
     private fun readCached(key: Key): Bitmap? {
         val file = key.source.cacheFile(cacheRoot, key.tile)
         return if (file.isFile) BitmapFactory.decodeFile(file.path) else null
     }
 
-    private fun download(key: Key): Bitmap? {
+    /** With [revalidate], returns null if the cached copy is still current, and marks it as checked. */
+    private fun download(key: Key, revalidate: Boolean = false): Bitmap? {
         val file = key.source.cacheFile(cacheRoot, key.tile)
         val conn = URL(key.source.url(key.tile)).openConnection() as HttpURLConnection
         conn.setRequestProperty("User-Agent", USER_AGENT)
         conn.connectTimeout = 10_000
         conn.readTimeout = 15_000
+        if (revalidate) conn.ifModifiedSince = file.lastModified()
         try {
+            if (conn.responseCode == HttpURLConnection.HTTP_NOT_MODIFIED) {
+                file.setLastModified(System.currentTimeMillis())
+                return null
+            }
             if (conn.responseCode != 200) return null
             val bytes = conn.inputStream.use { it.readBytes() }
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
@@ -187,6 +236,8 @@ class BasemapTiles(context: Context) {
 
     private companion object {
         const val RETRY_MS = 30_000L
+        const val REFRESH_WAIT_MS = 500L
+        const val DAY_MS = 24 * 60 * 60 * 1000L
         const val USER_AGENT = "GeoTrailMaps (Android geospatial PDF viewer)"
     }
 }
