@@ -35,7 +35,7 @@ An offline Android map viewer for geospatial PDFs, often called GeoPDFs. It open
 - **Background map**: OpenStreetMap or satellite tiles drawn under and around the PDF, so you can see what's beyond the map's edges. Tiles you've viewed are cached and may show offline; areas or zoom levels not viewed online won't. Each map remembers its own choice (or none) under *Layers → Background map*.
 - **Settings**: choose the coordinate format (decimal, DMS, DDM, UTM) and metric or imperial units.
 
-Requires Android 17 (API 37). Doesn't need Google Play Services. The only feature that uses the network is the optional background map.
+Requires Android 13 (API 33) or later. Doesn't need Google Play Services. The only feature that uses the network is the optional background map.
 
 ## Build
 

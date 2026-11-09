@@ -99,7 +99,7 @@ class PdfFile private constructor(private val buf: ByteBuffer) {
 
     fun streamData(stream: PdfStream): ByteArray {
         val raw = ByteArray(stream.length)
-        buf.get(stream.start, raw)
+        buf.duplicate().apply { position(stream.start) }.get(raw)
         val filter = resolve(stream.dict["Filter"])
         val filters = when (filter) {
             null -> emptyList()
