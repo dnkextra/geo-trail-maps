@@ -104,6 +104,8 @@ class MapLibrary(private val context: Context) {
 
     fun get(id: String): MapEntry? = _maps.value.find { it.id == id }
     fun pdfFile(id: String) = File(File(root, id), "map.pdf")
+    /** Opens the map's PDF for rendering; blocks, so not on the main thread. */
+    fun pdfRenderer(id: String) = PdfPageRenderer(context, pdfFile(id))
     fun thumbnailFile(id: String) = File(File(root, id), "thumb.png")
     private fun metaFile(id: String) = File(File(root, id), "meta.json")
     private fun featuresFile(id: String) = File(File(root, id), "features.json")
@@ -126,7 +128,7 @@ class MapLibrary(private val context: Context) {
             val info = runCatching { GeoPdfParser.parse(pdf) }.getOrNull()
             val geo = info?.geo
             val (w, h) = try {
-                PdfPageRenderer(pdf).use { r ->
+                pdfRenderer(id).use { r ->
                     thumbnailFile(id).outputStream().use { r.renderThumbnail(256).compress(Bitmap.CompressFormat.PNG, 90, it) }
                     r.width to r.height
                 }

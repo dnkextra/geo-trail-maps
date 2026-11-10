@@ -31,7 +31,6 @@ import org.geotrailmaps.pdf.PdfFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.geotrailmaps.render.PdfPageRenderer
 import org.geotrailmaps.render.dominantColor
 import org.geotrailmaps.render.removePaper
 import org.geotrailmaps.render.samplePixels
@@ -43,7 +42,7 @@ import kotlin.math.sqrt
 
 /** Everything that lives while one map is open: renderer, view state and features. */
 class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
-    private val renderer = PdfPageRenderer(library.pdfFile(entry.id))
+    private val renderer = library.pdfRenderer(entry.id)
     val viewport = MapViewport(renderer.width.toFloat(), renderer.height.toFloat())
 
     var base by mutableStateOf<RenderedRegion?>(null)

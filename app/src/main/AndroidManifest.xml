@@ -52,6 +52,13 @@
             android:exported="false"
             android:foregroundServiceType="location" />
 
+        <!-- Renders PDFs in a process with no permissions and no access to the app's files. -->
+        <service
+            android:name=".render.PdfRenderService"
+            android:exported="false"
+            android:isolatedProcess="true"
+            android:process=":pdf" />
+
         <!-- Pause and Stop on the track notifications. -->
         <receiver
             android:name=".track.RecordingActionReceiver"

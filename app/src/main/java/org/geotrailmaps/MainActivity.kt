@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Process
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -37,6 +38,7 @@ import org.geotrailmaps.data.Settings
 import org.geotrailmaps.geo.LatLon
 import org.geotrailmaps.location.LocationTracker
 import org.geotrailmaps.render.BasemapTiles
+import org.geotrailmaps.render.PdfWorker
 import org.geotrailmaps.track.TrackRecorder
 import org.geotrailmaps.ui.MapListScreen
 import org.geotrailmaps.ui.SettingsScreen
@@ -45,8 +47,12 @@ import org.geotrailmaps.ui.map.MapScreen
 import org.geotrailmaps.ui.theme.AppTheme
 
 class App : Application() {
+    // This also runs in PdfRenderService's isolated process, which has no permissions and can't
+    // read the app's files or use most system services. Put startup work below the isIsolated
+    // return: there it would throw, the worker would die as it starts, and no map would render.
     override fun onCreate() {
         super.onCreate()
+        if (Process.isIsolated()) return
         TrackRecorder.init(this, lazy { library })
     }
 
@@ -125,6 +131,12 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
         hasLocationPermission = permissionGranted() // may have been granted in system settings
         if (hasLocationPermission) app.tracker.start()
         onStopOrDispose { app.tracker.stop() }
+    }
+
+    // The PDF renderer is ready while the app is on screen, so maps open without waiting for it.
+    LifecycleStartEffect(Unit) {
+        val worker = PdfWorker.hold(app)
+        onStopOrDispose { worker.close() }
     }
 
     var openMapId by rememberSaveable { mutableStateOf<String?>(null) }
