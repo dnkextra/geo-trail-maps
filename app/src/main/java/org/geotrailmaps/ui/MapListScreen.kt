@@ -1,6 +1,7 @@
 package org.geotrailmaps.ui
 
 import android.graphics.BitmapFactory
+import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -330,6 +331,15 @@ private fun statusText(map: MapEntry, me: LatLon?, units: Units): String {
     return if (d == 0.0) "You are on this map" else "${Formats.distance(d, units)} away"
 }
 
+/**
+ * Decoded thumbnails by file path, kept while the app runs: rows show their image at once
+ * when the list comes back or scrolls, rather than a placeholder while the file is read
+ * again. A map's thumbnail never changes, so the path is key enough.
+ */
+private val thumbnails = object : LruCache<String, ImageBitmap>(8 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
+}
+
 @Composable
 private fun MapRow(
     map: MapEntry,
@@ -342,8 +352,10 @@ private fun MapRow(
     onToggleArchived: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val image by produceState<ImageBitmap?>(null, thumbnail) {
-        value = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(thumbnail.path)?.asImageBitmap() }
+    val path = thumbnail.path
+    val image by produceState(thumbnails[path], path) {
+        value = thumbnails[path]
+            ?: withContext(Dispatchers.IO) { BitmapFactory.decodeFile(path)?.asImageBitmap() }?.also { thumbnails.put(path, it) }
     }
     var menu by remember { mutableStateOf(false) }
     ListItem(

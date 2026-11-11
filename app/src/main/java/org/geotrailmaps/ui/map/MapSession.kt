@@ -47,6 +47,14 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
 
     var base by mutableStateOf<RenderedRegion?>(null)
         private set
+    /**
+     * A small stored image of the page, shown until [base] is rendered (which can take a
+     * moment for a large map); null once it is, or when the map has none yet.
+     */
+    var preview by mutableStateOf(
+        library.loadPreview(entry.id)?.let { RenderedRegion(it, 0f, 0f, it.width / renderer.width.toFloat()) },
+    )
+        private set
     val tiles = PageTiles(renderer.width.toFloat(), renderer.height.toFloat())
     /** Changes whenever a tile or paper-free image arrives, so the map redraws. */
     var imagesVersion by mutableIntStateOf(0)
@@ -140,13 +148,18 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
         val scale = min(3000f / max(w, h), sqrt(6_000_000f / (w * h)))
         val bitmap = renderer.render(0f, 0f, scale, (w * scale).roundToInt(), (h * scale).roundToInt()) ?: return
         base = RenderedRegion(bitmap, 0f, 0f, scale)
-        val geo = entry.geo ?: return
-        paperColors = withContext(Dispatchers.Default) {
-            val (inner, outer) = samplePixels(bitmap) { x, y -> geo.contains(PagePoint(x / scale.toDouble(), y / scale.toDouble())) }
-            val paper = dominantColor(inner)
-            paper to if (outer.isEmpty()) paper else dominantColor(outer)
+        preview = null
+        val geo = entry.geo
+        if (geo != null) {
+            paperColors = withContext(Dispatchers.Default) {
+                val (inner, outer) = samplePixels(bitmap) { x, y -> geo.contains(PagePoint(x / scale.toDouble(), y / scale.toDouble())) }
+                val paper = dominantColor(inner)
+                paper to if (outer.isEmpty()) paper else dominantColor(outer)
+            }
+            requestTiles()
         }
-        requestTiles()
+        // For next time this map is opened; after the tiles are queued, so it doesn't hold them up.
+        library.savePreview(entry.id, bitmap)
     }
 
     // Main thread only, like the tile cache.

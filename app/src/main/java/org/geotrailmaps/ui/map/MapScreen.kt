@@ -836,7 +836,7 @@ private fun MapContent(
     Box(Modifier.fillMaxSize()) {
         MapView(
             viewport = viewport,
-            base = session.base,
+            base = session.base ?: session.preview,
             tiles = {
                 session.imagesVersion // redraw when tiles arrive
                 session.base?.let { session.tiles.drawable(viewport, it.scale) }.orEmpty()

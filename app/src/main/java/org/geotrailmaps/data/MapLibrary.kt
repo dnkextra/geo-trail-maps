@@ -2,6 +2,7 @@ package org.geotrailmaps.data
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
@@ -31,6 +32,9 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 /** An imported map. Page size is in PDF points as PdfRenderer reports it. */
 data class MapEntry(
@@ -65,6 +69,8 @@ class ImportException(message: String) : Exception(message)
 
 /** Larger than any real map, and PDFs over 2 GB can't be memory-mapped for reading anyway. */
 internal const val MAX_PDF_BYTES = 1L shl 30
+/** Longer side of the stored page preview, in pixels: quick to read, sharp enough for a moment. */
+private const val PREVIEW_SIZE = 1024
 
 /**
  * Copies a PDF from [input] to [out], checking it looks like a PDF before copying the rest and
@@ -107,6 +113,31 @@ class MapLibrary(private val context: Context) {
     /** Opens the map's PDF for rendering; blocks, so not on the main thread. */
     fun pdfRenderer(id: String) = PdfPageRenderer(context, pdfFile(id))
     fun thumbnailFile(id: String) = File(File(root, id), "thumb.png")
+    private fun previewFile(id: String) = File(File(root, id), "preview.webp")
+
+    /**
+     * A small image of the whole page, shown while the map opens until the page is rendered;
+     * null until [savePreview] has made one. Blocks, so not on the main thread.
+     */
+    fun loadPreview(id: String): Bitmap? = previewFile(id).takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) }
+
+    /**
+     * Keeps a reduced copy of [page], the whole page as rendered, for [loadPreview], unless
+     * the map has one (its PDF never changes). Failing only means there's no preview.
+     */
+    suspend fun savePreview(id: String, page: Bitmap) = withContext(Dispatchers.IO) {
+        val file = previewFile(id)
+        if (file.exists()) return@withContext
+        // Written under another name first, so a half-written file is never taken for the preview.
+        val partial = File(file.parentFile, "preview.partial")
+        runCatching {
+            val k = min(1f, PREVIEW_SIZE.toFloat() / max(page.width, page.height))
+            val small = Bitmap.createScaledBitmap(page, (page.width * k).roundToInt().coerceAtLeast(1), (page.height * k).roundToInt().coerceAtLeast(1), true)
+            val written = partial.outputStream().use { small.compress(Bitmap.CompressFormat.WEBP_LOSSY, 80, it) }
+            if (!written || !partial.renameTo(file)) partial.delete()
+        }.onFailure { partial.delete() }
+    }
+
     private fun metaFile(id: String) = File(File(root, id), "meta.json")
     private fun featuresFile(id: String) = File(File(root, id), "features.json")
 
