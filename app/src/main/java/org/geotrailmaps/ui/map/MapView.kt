@@ -180,6 +180,37 @@ class MapViewport(val pageWidth: Float, val pageHeight: Float) {
         if (w < 0.01f && h < 0.01f) return showPoint(c)
         centerOn(c, min(size.width / w.coerceAtLeast(0.01f), visibleHeight / h.coerceAtLeast(0.01f)) * 0.8f)
     }
+
+    /**
+     * Brings a page-space rectangle into the visible area, clear of its edges by a tenth of
+     * the width and height, changing the view no more than that takes: zooms out if it's too
+     * big (never in), then moves just far enough. Nothing happens if it's already there, or
+     * if it's too big to show at all.
+     */
+    fun reveal(minX: Float, minY: Float, maxX: Float, maxY: Float) {
+        if (size == IntSize.Zero) return
+        val fits = min(size.width / (maxX - minX).coerceAtLeast(0.01f), visibleHeight / (maxY - minY).coerceAtLeast(0.01f)) * 0.8f
+        // Too far apart to show even zoomed right out (somewhere far off the map): better left alone than centred on neither end.
+        if (fits < minScale) return
+        if (fits < scale) centerOn(center, fits)
+        // The 0.8 above leaves at least this much room on each side.
+        val padX = size.width * 0.1f
+        val padY = visibleHeight * 0.1f
+        val dx = shiftInto(minX * scale + offset.x, maxX * scale + offset.x, padX, size.width - padX)
+        val dy = shiftInto(minY * scale + offset.y, maxY * scale + offset.y, insetTop + padY, size.height - insetBottom - padY)
+        if (dx != 0f || dy != 0f) {
+            offset += Offset(dx, dy)
+            fitted = false
+        }
+    }
+
+    /** How far to move [a]..[b] so it lies within [lo]..[hi] (centred, if it's too long). */
+    private fun shiftInto(a: Float, b: Float, lo: Float, hi: Float): Float = when {
+        b - a > hi - lo -> (lo + hi) / 2 - (a + b) / 2
+        a < lo -> lo - a
+        b > hi -> hi - b
+        else -> 0f
+    }
 }
 
 fun rotateBy(v: Offset, degrees: Float): Offset {

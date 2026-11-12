@@ -348,6 +348,8 @@ private fun MapContent(
     var pressed by remember { mutableStateOf<LatLon?>(null) }
     /** Finding a route before there's a GPS fix: it starts from you once there is one. */
     var routeFromMe by remember { mutableStateOf(false) }
+    /** "Find route" was just used: its route is brought into view once it's found. */
+    var revealRoute by remember { mutableStateOf(false) }
     /** Adding trails (over Navigate, if it was open: it's back after). */
     var addingTrails by remember { mutableStateOf(false) }
     var trailMode by remember { mutableStateOf(TrailMode.DRAW) }
@@ -589,6 +591,7 @@ private fun MapContent(
         navigating = false
         tapPoints.clear()
         routeFromMe = false
+        revealRoute = false
         pressed = null
     }
 
@@ -609,13 +612,12 @@ private fun MapContent(
         openEditor(f.id)
     }
 
-    /** Shows two places together, such as where you are and where you're going. */
-    fun showBoth(a: LatLon, b: LatLon) {
+    /** Brings the whole of [path] into view with some room around it: zooms out if it has to (never in), and moves no further than needed. */
+    fun revealPath(path: List<LatLon>) {
         val g = geo ?: return
-        val pa = g.toPage(a)
-        val pb = g.toPage(b)
-        stopAutoMove()
-        viewport.showRect(minOf(pa.x, pb.x).toFloat(), minOf(pa.y, pb.y).toFloat(), maxOf(pa.x, pb.x).toFloat(), maxOf(pa.y, pb.y).toFloat())
+        if (path.isEmpty()) return
+        val pts = path.map { g.toPage(it) }
+        viewport.reveal(pts.minOf { it.x }.toFloat(), pts.minOf { it.y }.toFloat(), pts.maxOf { it.x }.toFloat(), pts.maxOf { it.y }.toFloat())
     }
 
     /** Navigate along trails from where you are to [to]. */
@@ -623,6 +625,7 @@ private fun MapContent(
         startTool()
         navMode = NavMode.TRAILS
         navigating = true
+        revealRoute = true
         val me = myLatLon
         if (me == null || !onMap) {
             // Off the map, a route from you would mostly be a straight line to its edge.
@@ -640,6 +643,13 @@ private fun MapContent(
         if (!routeFromMe || !navigating || !onMap || addingTrails) return@LaunchedEffect
         routeFromMe = false
         tapPoints.add(0, me)
+    }
+    // Once that route is found, the map zooms out (never in) if that's needed to see all of it.
+    LaunchedEffect(revealRoute, currentRoute) {
+        val route = currentRoute ?: return@LaunchedEffect
+        if (!revealRoute || routeFromMe || tapPoints.size < 2) return@LaunchedEffect
+        revealRoute = false
+        revealPath(route.points)
     }
 
     /** Zooms to fit [list] (or centres on a single placemark). */
@@ -1231,12 +1241,14 @@ private fun MapContent(
                             hasLineLayers = alongTrails && session.features.any { it.type == FeatureType.LINE && it.layerId != null },
                             waitingForLocation = routeFromMe,
                             units = units,
-                            onModeChange = { navMode = it },
+                            // Changing mode or undoing a point makes it the user's own route: the view is theirs too.
+                            onModeChange = { navMode = it; revealRoute = false },
                             onOpenLayers = { showList = true },
                             onAddTrails = ::startAddingTrails,
                             onImport = { importLauncher.launch(IMPORT_TYPES) },
                             onUndo = {
                                 routeFromMe = false
+                                revealRoute = false
                                 tapPoints.removeLastOrNull()
                             },
                             onSave = { saveShape(false, if (alongTrails) currentRoute!!.points else tapPoints.toList()) },
@@ -1307,8 +1319,20 @@ private fun MapContent(
             trailByLayer = Trails.byLayer(f, session.layers.find { it.id == f.layerId }),
             onTrail = if (f.type == FeatureType.LINE) ({ on -> session.setFeatureTrail(f.id, on) }) else null,
             onNavigate = {
-                navTarget = NavTarget(f.name, f.points.first())
-                myLatLon?.let { showBoth(it, f.points.first()) }
+                val to = f.points.first()
+                scope.launch {
+                    // This map has trails (its own, or added ones): the way there along them, as with "Find route".
+                    if (onMap && !session.trailNetwork().isEmpty) {
+                        navTarget = null
+                        findRoute(to)
+                    } else {
+                        navTarget = NavTarget(f.name, to)
+                        myLatLon?.let {
+                            stopAutoMove()
+                            revealPath(listOf(it, to))
+                        }
+                    }
+                }
             },
             onSave = session::upsert,
             onDelete = {
