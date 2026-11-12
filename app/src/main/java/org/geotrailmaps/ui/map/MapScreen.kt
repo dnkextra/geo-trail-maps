@@ -632,7 +632,6 @@ private fun MapContent(
             routeFromMe = true
         } else {
             tapPoints += listOf(me, to)
-            showBoth(me, to)
         }
     }
     // The first fix on this map after "Find route" becomes the route's start (after adding trails, if that's open).
@@ -641,7 +640,6 @@ private fun MapContent(
         if (!routeFromMe || !navigating || !onMap || addingTrails) return@LaunchedEffect
         routeFromMe = false
         tapPoints.add(0, me)
-        tapPoints.getOrNull(1)?.let { showBoth(me, it) }
     }
 
     /** Zooms to fit [list] (or centres on a single placemark). */
