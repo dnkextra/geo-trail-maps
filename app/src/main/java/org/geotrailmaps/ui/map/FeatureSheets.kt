@@ -6,6 +6,8 @@ import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.material3.RadioButton
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -289,6 +291,8 @@ fun FeatureListSheet(
     features: List<Feature>,
     layers: List<FeatureLayer>,
     basemap: BasemapSource?,
+    /** Every background map that can be chosen. */
+    basemaps: List<BasemapSource>,
     /** This map's PDF over the background: see [org.geotrailmaps.data.MapEntry.seeThrough]. */
     seeThrough: Float,
     canSeeThrough: Boolean,
@@ -514,20 +518,40 @@ fun FeatureListSheet(
             text = {
                 (LocalView.current.parent as? DialogWindowProvider)?.window?.let { w -> SideEffect { w.setDimAmount(0f) } }
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    val choices = listOf(null to "None", BasemapSource.OSM to "OSM", BasemapSource.SATELLITE to "Satellite")
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                        choices.forEachIndexed { i, (source, label) ->
-                            SegmentedButton(
-                                selected = basemap == source,
-                                onClick = { actions.onBasemap(source) },
-                                shape = SegmentedButtonDefaults.itemShape(i, choices.size),
-                                // No check mark: the fill shows the choice, and "Satellite" needs the room.
-                                icon = {},
-                                colors = SegmentedButtonDefaults.colors(
-                                    activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                ),
-                            ) { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    // "OpenStreetMap" doesn't fit a segmented button; the list has room for full names.
+                    val segmented = basemaps.size <= 2
+                    val choices = listOf(null to "None") + basemaps.map { it to if (segmented && it == BasemapSource.OSM) "OSM" else it.label }
+                    if (segmented) {
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                            choices.forEachIndexed { i, (source, label) ->
+                                SegmentedButton(
+                                    selected = basemap == source,
+                                    onClick = { actions.onBasemap(source) },
+                                    shape = SegmentedButtonDefaults.itemShape(i, choices.size),
+                                    // No check mark: the fill shows the choice, and "Satellite" needs the room.
+                                    icon = {},
+                                    colors = SegmentedButtonDefaults.colors(
+                                        activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    ),
+                                ) { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                            }
+                        }
+                    } else {
+                        // With sources added in Settings there are too many for one row of buttons.
+                        Column(Modifier.selectableGroup()) {
+                            for ((source, label) in choices) {
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .selectable(selected = basemap == source, role = Role.RadioButton) { actions.onBasemap(source) }
+                                        .heightIn(min = 48.dp)
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(selected = basemap == source, onClick = null)
+                                    Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 12.dp))
+                                }
+                            }
                         }
                     }
                     if (basemap != null) {
@@ -544,8 +568,10 @@ fun FeatureListSheet(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f),
                             )
-                            IconButton(onClick = { uriHandler.openUri(basemap.creditUrl) }) {
-                                Icon(Icons.AutoMirrored.Filled.OpenInNew, "${basemap.label} credits and licence")
+                            basemap.creditUrl?.let { url ->
+                                IconButton(onClick = { uriHandler.openUri(url) }) {
+                                    Icon(Icons.AutoMirrored.Filled.OpenInNew, "${basemap.label} credits and licence")
+                                }
                             }
                         }
                     }

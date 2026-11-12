@@ -71,10 +71,9 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
         private set
     /** False (and nothing changes) if it couldn't be saved. */
     fun setBasemap(source: BasemapSource?): Boolean {
-        val choice = source?.name ?: NO_BASEMAP
+        val choice = source?.id ?: NO_BASEMAP
         return library.setBasemap(entry.id, choice).also { if (it) basemapChoice = choice }
     }
-    val basemap: BasemapSource? get() = BasemapSource.entries.firstOrNull { it.name == basemapChoice }
 
     /**
      * The paper colour inside the map frame, and outside it (margins and legend, often a

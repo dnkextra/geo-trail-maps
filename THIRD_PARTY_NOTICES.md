@@ -73,6 +73,10 @@ No background tiles are bundled in this repository or the APK.
   MIT license does not grant commercial rights to this imagery or permission
   to redistribute it under MIT; commercial users must obtain the appropriate
   rights or use another provider.
+- **Map sources added by the user:** the app can fetch tiles from an address
+  the user enters in Settings. None is preset. The user chooses the source
+  and is responsible for following its terms and for entering the credit it
+  requires.
 - **User-imported maps and features:** remain under their owners' terms.
   Opening, recording, tracing, or exporting data does not by itself grant
   rights to redistribute someone else's map or data.

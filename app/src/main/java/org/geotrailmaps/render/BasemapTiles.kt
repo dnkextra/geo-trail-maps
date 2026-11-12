@@ -59,39 +59,83 @@ data class Tile(val z: Int, val x: Int, val y: Int) {
 }
 
 /** Where background map tiles come from, and the credit each one requires. */
-enum class BasemapSource(
+data class BasemapSource(
+    /** Saved with settings and with each map to say which source it uses. */
+    val id: String,
     val label: String,
     val credit: String,
     /** For the brief credit on the map itself; [credit] is shown in full in the layer list. */
     val shortCredit: String,
-    val creditUrl: String,
+    /** The provider's credits and licence page; null for a source the user added. */
+    val creditUrl: String?,
     /** Deeper zooms are drawn by enlarging tiles from this level. */
     val maxZoom: Int,
-    private val cacheDir: String,
+    /** A tile's address, with {z}, {x} and {y} where its numbers go. */
+    val urlTemplate: String,
+    val cacheDir: String,
+    private val cacheExtension: String,
     /** Cached tiles older than this are re-checked with the server; null for imagery that never changes. */
     val refreshAfterDays: Int?,
 ) {
-    OSM("OpenStreetMap", "© OpenStreetMap contributors", "© OpenStreetMap contributors", "https://www.openstreetmap.org/copyright", Tile.MAX_ZOOM, "tiles", 90),
-    // Sentinel-2 imagery is 10 m per pixel: zoom 15 is already enlarged on the server.
-    SATELLITE(
-        "Satellite",
-        "Sentinel-2 cloudless by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2025)",
-        "Sentinel-2 cloudless by EOX IT Services GmbH · Contains modified Copernicus Sentinel data 2025",
-        "https://s2maps.eu",
-        15,
-        "tiles-s2cloudless-2025",
-        null,
-    );
-
-    fun url(t: Tile) = when (this) {
-        OSM -> "https://tile.openstreetmap.org/${t.z}/${t.x}/${t.y}.png"
-        SATELLITE -> "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/${t.z}/${t.y}/${t.x}.jpg"
-    }
+    fun url(t: Tile) = urlTemplate.replace("{z}", t.z.toString()).replace("{x}", t.x.toString()).replace("{y}", t.y.toString())
 
     /** The server tiles are downloaded from, for privacy disclosures. */
-    val host: String get() = url(Tile(0, 0, 0)).substringAfter("://").substringBefore('/')
+    val host: String get() = hostOf(urlTemplate)
 
-    fun cacheFile(root: File, t: Tile) = File(root, "$cacheDir/${t.z}/${t.x}/${t.y}." + url(t).substringAfterLast('.'))
+    fun cacheFile(root: File, t: Tile) = File(root, "$cacheDir/${t.z}/${t.x}/${t.y}.$cacheExtension")
+
+    companion object {
+        val OSM = BasemapSource(
+            "OSM", "OpenStreetMap", "© OpenStreetMap contributors", "© OpenStreetMap contributors",
+            "https://www.openstreetmap.org/copyright", Tile.MAX_ZOOM,
+            "https://tile.openstreetmap.org/{z}/{x}/{y}.png", "tiles", "png", 90,
+        )
+
+        // Noncommercial only (CC BY-NC-SA 4.0); EOX's 2016 layer, s2cloudless_3857, is CC BY 4.0.
+        // Sentinel-2 is 10 m per pixel: zoom 15 is already enlarged on the server. The WMTS path
+        // puts the row before the column.
+        val SATELLITE = BasemapSource(
+            "SATELLITE", "Satellite",
+            "Sentinel-2 cloudless by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2025)",
+            "Sentinel-2 cloudless by EOX IT Services GmbH · Contains modified Copernicus Sentinel data 2025",
+            "https://s2maps.eu", 15,
+            "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/{z}/{y}/{x}.jpg", "tiles-s2cloudless-2025", "jpg", null,
+        )
+
+        val builtIn = listOf(OSM, SATELLITE)
+
+        fun hostOf(template: String) = template.substringAfter("://").substringBefore('/').substringBefore('?').substringAfterLast('@').substringBefore(':')
+
+        /** What's wrong with a tile address someone typed, or null if it can be used. */
+        fun templateError(template: String): String? = when {
+            !template.startsWith("https://") -> "Must start with https://"
+            listOf("{z}", "{x}", "{y}").any { it !in template } -> "Must include {z}, {x} and {y}"
+            // Addresses copied from other apps often carry placeholders like {s} that aren't filled in here.
+            template.replace("{z}", "").replace("{x}", "").replace("{y}", "").any { it == '{' || it == '}' } ->
+                "Only {z}, {x} and {y} can go in braces"
+            template.any { it.isWhitespace() } || hostOf(template).isEmpty() ||
+                runCatching { java.net.URI(template.replace("{z}", "0").replace("{x}", "0").replace("{y}", "0")).host }.getOrNull() == null ->
+                "Not a valid address"
+            else -> null
+        }
+    }
+}
+
+/** A background map source the user added in Settings. */
+data class CustomBasemap(
+    val id: String,
+    val name: String,
+    val urlTemplate: String,
+    /** The credit the provider asks for; may be blank. */
+    val attribution: String,
+    val maxZoom: Int,
+) {
+    fun toSource(): BasemapSource {
+        val credit = attribution.ifBlank { "Tiles from " + BasemapSource.hostOf(urlTemplate) }
+        // A changed address gets a new cache folder, so tiles from the old one are never shown for it.
+        val cacheDir = "tiles-custom-$id-" + Integer.toHexString(urlTemplate.hashCode())
+        return BasemapSource(id, name, credit, credit, null, maxZoom, urlTemplate, cacheDir, "tile", 90)
+    }
 }
 
 /**
@@ -110,6 +154,8 @@ class BasemapTiles(context: Context) {
     /** The latest visible set; queued tiles that have scrolled away are skipped. */
     @Volatile private var wanted: Set<Key> = emptySet()
     private val failedAt = HashMap<Key, Long>()
+    /** Cache folders of the current sources; see [pruneCaches]. */
+    @Volatile private var cacheDirs: Set<String> = emptySet()
     /** Old cached tiles being re-checked; see [refresh]. */
     private val refreshing = HashSet<Key>()
     /** Missing tiles queued or downloading; refreshes wait for these. */
@@ -142,6 +188,17 @@ class BasemapTiles(context: Context) {
     /** Drops everything queued, e.g. when the map is closed or the background map turned off. */
     fun cancelAll() {
         wanted = emptySet()
+    }
+
+    /** Deletes cached tiles of sources that no longer exist: removed or changed custom ones. */
+    fun pruneCaches(sources: List<BasemapSource>) {
+        cacheDirs = sources.mapTo(HashSet()) { it.cacheDir }
+        scope.launch(disk) {
+            // Checked against the field as each folder comes up, not a captured list: after a
+            // quick second change, a run that's late or still going must keep the newest folders.
+            cacheRoot.listFiles { f -> f.isDirectory && (f.name == "tiles" || f.name.startsWith("tiles-")) }
+                ?.forEach { if (it.name !in cacheDirs) it.deleteRecursively() }
+        }
     }
 
     private fun enqueue(key: Key) {
@@ -227,7 +284,8 @@ class BasemapTiles(context: Context) {
                 return null
             }
             if (conn.responseCode != 200) return null
-            val bytes = conn.inputStream.use { it.readBytes() }
+            val bytes = conn.inputStream.use { it.readNBytes(MAX_TILE_BYTES + 1) }
+            if (bytes.size > MAX_TILE_BYTES) return null
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
             file.parentFile?.mkdirs()
             runCatching { file.writeBytes(bytes) }
@@ -240,6 +298,8 @@ class BasemapTiles(context: Context) {
     private companion object {
         const val RETRY_MS = 30_000L
         const val REFRESH_WAIT_MS = 500L
+        /** Far larger than any real tile; a custom source could send anything. */
+        const val MAX_TILE_BYTES = 4 * 1024 * 1024
         const val DAY_MS = 24 * 60 * 60 * 1000L
         const val USER_AGENT = "GeoTrailMaps (Android geospatial PDF viewer)"
     }

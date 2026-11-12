@@ -258,7 +258,9 @@ private fun MapContent(
     // Each map keeps its own background; one opened before it had a choice gets the default from Settings.
     val defaultBasemap by settings.defaultBasemap.collectAsState()
     LaunchedEffect(session) { if (session.basemapChoice == null) session.setBasemap(defaultBasemap) }
-    val basemapSource = if (session.basemapChoice == null) defaultBasemap else session.basemap
+    val basemaps by settings.basemaps.collectAsState()
+    // A map whose custom source was since removed shows no background.
+    val basemapSource = if (session.basemapChoice == null) defaultBasemap else basemaps.firstOrNull { it.id == session.basemapChoice }
     // The tile credit shows on the map for a few seconds whenever the background map appears,
     // then fades; it stays in the layer list.
     var showCredit by remember { mutableStateOf(false) }
@@ -1322,6 +1324,7 @@ private fun MapContent(
             features = session.features,
             layers = session.layers,
             basemap = basemapSource,
+            basemaps = basemaps,
             seeThrough = session.seeThrough,
             // Needs the background drawn under the page, which needs georeferencing.
             canSeeThrough = geo != null,
@@ -1593,7 +1596,10 @@ private fun BasemapAttribution(source: BasemapSource, modifier: Modifier = Modif
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
         modifier = modifier
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.4f), MaterialTheme.shapes.extraSmall)
-            .clickable(onClickLabel = "Open the ${source.label} credits page") { uriHandler.openUri(source.creditUrl) }
+            .then(
+                source.creditUrl?.let { url -> Modifier.clickable(onClickLabel = "Open the ${source.label} credits page") { uriHandler.openUri(url) } }
+                    ?: Modifier,
+            )
             .padding(horizontal = 6.dp, vertical = 3.dp),
     )
 }

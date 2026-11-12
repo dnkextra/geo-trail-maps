@@ -20,6 +20,7 @@ When a background map is shown and the phone is online, the app downloads map ti
 
 - OpenStreetMap: `tile.openstreetmap.org`, operated by the OpenStreetMap Foundation ([privacy policy](https://osmfoundation.org/wiki/Privacy_Policy))
 - Satellite: `tiles.maps.eox.at`, operated by EOX IT Services GmbH
+- A map source you added in Settings: the server in the tile address you entered
 
 Each request reveals your IP address and the area of the map you are viewing. When the map follows your position, that area is near where you are. The provider's own privacy policy applies to these requests. Downloaded tiles are cached on your device.
 

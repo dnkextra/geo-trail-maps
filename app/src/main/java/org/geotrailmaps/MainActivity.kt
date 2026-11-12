@@ -95,6 +95,9 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
+    val basemaps by app.settings.basemaps.collectAsState()
+    LaunchedEffect(basemaps) { app.basemap.pruneCaches(basemaps) }
+
     val activity = LocalActivity.current
     val locationPermissions = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
     fun permissionGranted() = locationPermissions.any { context.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }

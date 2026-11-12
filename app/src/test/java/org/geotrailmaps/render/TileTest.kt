@@ -41,4 +41,32 @@ class TileTest {
         assertEquals("/cache/tiles/15/8736/15439.png", BasemapSource.OSM.cacheFile(root, t).path)
         assertEquals("/cache/tiles-s2cloudless-2025/15/8736/15439.jpg", BasemapSource.SATELLITE.cacheFile(root, t).path)
     }
+
+    @Test
+    fun customSource() {
+        val source = CustomBasemap("custom-1", "Topo", "https://user:key@tiles.example.com:8443/topo/{z}/{y}/{x}?key=a.b/c", "", 17).toSource()
+        val t = Tile(15, 8736, 15439)
+        assertEquals("https://user:key@tiles.example.com:8443/topo/15/15439/8736?key=a.b/c", source.url(t))
+        assertEquals("tiles.example.com", source.host)
+        assertEquals(17, source.maxZoom)
+        // The address's own extension and query never reach the file name.
+        val file = source.cacheFile(java.io.File("/cache"), t).path
+        assert(file.startsWith("/cache/tiles-custom-custom-1-") && file.endsWith("/15/8736/15439.tile")) { file }
+        // A changed address doesn't reuse the old one's cached tiles.
+        val moved = CustomBasemap("custom-1", "Topo", "https://other.example.com/{z}/{x}/{y}.png", "", 17).toSource()
+        assert(moved.cacheDir != source.cacheDir)
+        assertEquals("© Example", CustomBasemap("c", "n", "https://e.com/{z}/{x}/{y}", "© Example", 19).toSource().credit)
+    }
+
+    @Test
+    fun tileAddressValidation() {
+        assertEquals(null, BasemapSource.templateError("https://tiles.example.com/{z}/{x}/{y}.png"))
+        assertEquals(null, BasemapSource.templateError("https://tiles.example.com/wmts/{z}/{y}/{x}.jpg?key=abc"))
+        for (source in BasemapSource.builtIn) assertEquals(null, BasemapSource.templateError(source.urlTemplate))
+        assertEquals("Must start with https://", BasemapSource.templateError("http://tiles.example.com/{z}/{x}/{y}.png"))
+        assertEquals("Must include {z}, {x} and {y}", BasemapSource.templateError("https://tiles.example.com/{z}/{x}.png"))
+        assertEquals("Only {z}, {x} and {y} can go in braces", BasemapSource.templateError("https://{s}.example.com/{z}/{x}/{y}.png"))
+        assertEquals("Not a valid address", BasemapSource.templateError("https:///{z}/{x}/{y}.png"))
+        assertEquals("Not a valid address", BasemapSource.templateError("https://tiles.example.com/a b/{z}/{x}/{y}.png"))
+    }
 }

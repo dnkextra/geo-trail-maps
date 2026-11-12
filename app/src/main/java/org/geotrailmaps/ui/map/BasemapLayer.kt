@@ -68,10 +68,12 @@ fun DrawScope.drawBasemap(tiles: BasemapTiles, source: BasemapSource, visible: L
 
     fun draw(tile: Tile, bitmap: Bitmap, ancestorLevels: Int) {
         // For a stand-in, the whole ancestor bitmap is warped, so clip it to this tile's area.
-        val size = 256f / (1 shl ancestorLevels)
-        val sx = (tile.x - ((tile.x shr ancestorLevels) shl ancestorLevels)) * size
-        val sy = (tile.y - ((tile.y shr ancestorLevels) shl ancestorLevels)) * size
-        floatArrayOf(sx, sy, sx + size, sy, sx + size, sy + size, sx, sy + size).copyInto(src)
+        // Sized from the bitmap: some sources serve tiles larger than 256 px.
+        val w = bitmap.width.toFloat() / (1 shl ancestorLevels)
+        val h = bitmap.height.toFloat() / (1 shl ancestorLevels)
+        val sx = (tile.x - ((tile.x shr ancestorLevels) shl ancestorLevels)) * w
+        val sy = (tile.y - ((tile.y shr ancestorLevels) shl ancestorLevels)) * h
+        floatArrayOf(sx, sy, sx + w, sy, sx + w, sy + h, sx, sy + h).copyInto(src)
         listOf(0 to 0, 1 to 0, 1 to 1, 0 to 1).forEachIndexed { i, (dx, dy) ->
             val p = proj.toScreen(tile.corner(dx, dy))
             dst[2 * i] = p.x

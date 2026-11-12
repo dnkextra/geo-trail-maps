@@ -32,7 +32,7 @@ An offline Android map viewer for geospatial PDFs, often called GeoPDFs. It open
 - **Adding trails**: *Layers → Add trails*. *Draw* a trail by tapping points (they snap onto trails nearby, so junctions connect), then *Next trail* for the next one. *Pick from map* takes lines printed in the PDF: lines that can be picked have a faint tint; tap them to select, or select every line drawn the same way at once. Undo steps back through points and selections. Nothing is added until you *Confirm*; closing with trails pending asks whether to add or discard them. Added trails go into the "My trails" and "From the map" layers, which aren't drawn on the map unless you tick them.
 - **Import**: add GPX, KML or KMZ files: waypoints, tracks, routes, paths and polygons. Each file becomes a layer under *Layers* (a GPX track or KML placemark in several parts stays one track, with gaps between the parts), hidden at first so it doesn't cover the map, and you can show, rename or delete a whole layer or anything in it. *Show on all maps* makes a layer appear on every map it overlaps instead of just this one.
 - **Export**: share features as KML (each imported layer becomes a folder) or GPX.
-- **Background map**: OpenStreetMap or satellite tiles drawn under and around the PDF, so you can see what's beyond the map's edges. Tiles you've viewed are cached and may show offline; areas or zoom levels not viewed online won't. Each map remembers its own choice (or none) under *Layers → Background map*.
+- **Background map**: OpenStreetMap or satellite tiles, or tiles from a source you add in Settings (an `https://…/{z}/{x}/{y}` address), drawn under and around the PDF, so you can see what's beyond the map's edges. Tiles you've viewed are cached and may show offline; areas or zoom levels not viewed online won't. Each map remembers its own choice (or none) under *Layers → Background map*.
 - **Settings**: choose the coordinate format (decimal, DMS, DDM, UTM) and metric or imperial units.
 
 Requires Android 13 (API 33) or later. Doesn't need Google Play Services. The only feature that uses the network is the optional background map.
@@ -89,7 +89,7 @@ app/src/main/java/org/geotrailmaps/
   geo/PdfLayerLines.kt      stroked lines in the PDF, with how they're drawn, or of named layers (e.g. "Trails")
   ui/map/MapLines.kt        the PDF's lines that can be picked as trails
   render/PdfPageRenderer.kt Android PdfRenderer wrapper (renders page regions)
-  render/BasemapTiles.kt    OpenStreetMap tile fetching and caching (memory + disk)
+  render/BasemapTiles.kt    Background map sources, tile fetching and caching (memory + disk)
   data/                     map library storage, features + layers, settings, formatting
   data/FeatureImport.kt     GPX / KML / KMZ import;  data/FeatureExport.kt  KML / GPX export
   data/CoordinateParser.kt  typed coordinates (decimal, DMS, DDM, UTM)
