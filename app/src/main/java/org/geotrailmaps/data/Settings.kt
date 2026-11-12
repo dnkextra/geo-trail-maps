@@ -82,6 +82,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("fullscreenHintShown", false)
         set(value) = prefs.edit { putBoolean("fullscreenHintShown", value) }
 
+    /** Whether the notice about what routes can get wrong has been acknowledged. */
+    var routeNoticeShown: Boolean
+        get() = prefs.getBoolean("routeNoticeShown", false)
+        set(value) = prefs.edit { putBoolean("routeNoticeShown", value) }
+
     private val _mapSort = MutableStateFlow(enumOrDefault(prefs.getString("mapSort", null), MapSort.NAME))
     val mapSort: StateFlow<MapSort> = _mapSort
 

@@ -154,6 +154,12 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                 trailingContent = { Icon(Icons.AutoMirrored.Filled.OpenInNew, null) },
                 modifier = Modifier.clickable { uriHandler.openUri(PRIVACY_POLICY_URL) },
             )
+            SectionTitle("Routes")
+            Text(
+                "$ROUTE_NOTICE_TITLE\n\n$ROUTE_NOTICE_TEXT",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
             SectionTitle("Your data")
             Text(
                 "Maps, tracks and features are stored on this phone. Android's backup may include them, but large maps " +

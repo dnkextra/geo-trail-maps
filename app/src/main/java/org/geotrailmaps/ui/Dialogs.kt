@@ -43,3 +43,22 @@ fun ConfirmDeleteDialog(title: String? = null, text: String? = null, onDelete: (
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/** What a route can get wrong: shown once when Navigate is first used, and under Settings. */
+const val ROUTE_NOTICE_TITLE = "When using a route, please keep in mind:"
+const val ROUTE_NOTICE_TEXT =
+    "• The app doesn't account for real-world conditions or safety.\n" +
+        "• Routes are based on map lines and may not be optimal or traversable.\n" +
+        "• Trail maps can be inaccurate, so distance estimates may be off.\n\n" +
+        "Please be discerning and stay safe!"
+
+/** The route notice. Only OK closes it, so it isn't dismissed unread by a stray tap. */
+@Composable
+fun RouteNoticeDialog(onOk: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = {},
+        title = { Text(ROUTE_NOTICE_TITLE, style = MaterialTheme.typography.titleLarge) },
+        text = { Text(ROUTE_NOTICE_TEXT) },
+        confirmButton = { TextButton(onClick = onOk) { Text("OK") } },
+    )
+}

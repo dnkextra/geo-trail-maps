@@ -164,6 +164,7 @@ import org.geotrailmaps.data.MapEntry
 import org.geotrailmaps.data.MapLibrary
 import org.geotrailmaps.data.Settings
 import org.geotrailmaps.data.Units
+import org.geotrailmaps.ui.RouteNoticeDialog
 import org.geotrailmaps.ui.shareFeatures
 import org.geotrailmaps.data.overlaps
 import org.geotrailmaps.geo.GeoReference
@@ -326,6 +327,8 @@ private fun MapContent(
     var localizing by remember { mutableStateOf<FeatureLayer?>(null) }
     /** Navigate: tapping points to measure the way between them, along trails or straight. */
     var navigating by remember { mutableStateOf(false) }
+    /** The notice about what routes can get wrong shows once, the first time any kind of Navigate is used. */
+    var routeNoticeShown by remember { mutableStateOf(settings.routeNoticeShown) }
     /** Bars hidden so the map fills the screen; a tap on empty map toggles it. */
     var chromeHidden by remember { mutableStateOf(false) }
     // Last measured bar heights, restored explicitly when the bars come back.
@@ -1426,6 +1429,10 @@ private fun MapContent(
             },
             onDismiss = { showStopTrack = false },
         )
+    }
+
+    if ((navigating || navTarget != null) && !routeNoticeShown) {
+        RouteNoticeDialog(onOk = { settings.routeNoticeShown = true; routeNoticeShown = true })
     }
 
     localizing?.let { layer ->
