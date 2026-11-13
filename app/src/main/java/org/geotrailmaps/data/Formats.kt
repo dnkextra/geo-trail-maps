@@ -16,10 +16,10 @@ enum class CoordinateFormat(val label: String) {
 enum class Units(val label: String) { METRIC("Metric"), IMPERIAL("Imperial") }
 
 /** Which GPS fixes a recording keeps: those accurate to within [maxMeters], or all of them (null). */
-enum class TrackAccuracy(val label: String, val detail: String, val maxMeters: Float?) {
-    NORMAL("Within 35 m", "Skips points that may be off by more than 35 m. Best in the open.", 35f),
-    LOOSE("Within 100 m", "Fewer gaps under trees or in canyons, but a rougher line", 100f),
-    ALL("Keep every point", "Even ones far off, so tracks may zigzag and overstate the distance", null),
+enum class TrackAccuracy(val maxMeters: Float?) {
+    NORMAL(35f), LOOSE(100f), ALL(null);
+
+    fun label(units: Units) = maxMeters?.let { "Within ${Formats.distance(it.toDouble(), units)}" } ?: "Keep every point"
 }
 
 enum class MapSort(val label: String) { NAME("Name"), DISTANCE("Distance from you"), RECENT("Recently added") }

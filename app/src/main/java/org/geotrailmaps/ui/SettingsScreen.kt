@@ -112,7 +112,7 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
             SectionTitle("GPS points kept when recording a track")
             Column(Modifier.selectableGroup()) {
                 for (a in TrackAccuracy.entries) {
-                    Choice(a.label, a.detail, selected = a == trackAccuracy) { settings.setTrackAccuracy(a) }
+                    Choice(a.label(units), null, selected = a == trackAccuracy) { settings.setTrackAccuracy(a) }
                 }
             }
             SectionTitle("Background map for new maps")
@@ -191,10 +191,10 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-private fun Choice(title: String, example: String, selected: Boolean, trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+private fun Choice(title: String, example: String?, selected: Boolean, trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     ListItem(
         headlineContent = { Text(title) },
-        supportingContent = { Text(example) },
+        supportingContent = example?.let { { Text(it) } },
         leadingContent = { RadioButton(selected = selected, onClick = null) },
         trailingContent = trailing,
         modifier = Modifier.selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
