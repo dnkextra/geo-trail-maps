@@ -16,6 +16,7 @@ import android.location.LocationManager
 import android.location.LocationRequest
 import android.os.IBinder
 import android.os.SystemClock
+import org.geotrailmaps.App
 
 /**
  * Foreground service that keeps GPS running while a track records, including with the
@@ -93,7 +94,7 @@ class RecordingService : Service(), LocationListener {
     }
 
     override fun onLocationChanged(location: Location) {
-        TrackRecorder.onLocation(location)
+        TrackRecorder.onLocation(location, (application as App).settings.trackAccuracy.value.maxMeters)
         val now = SystemClock.elapsedRealtime()
         if (now - lastNotified > 15_000) {
             lastNotified = now

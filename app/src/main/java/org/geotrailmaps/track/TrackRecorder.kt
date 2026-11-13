@@ -276,10 +276,11 @@ object TrackRecorder {
         withTimeoutOrNull(6_000) { flushPending.first { !it } }
     }
 
-    internal fun onLocation(location: Location) {
+    /** [maxAccuracyM] is the Settings choice ([org.geotrailmaps.data.TrackAccuracy]): less accurate fixes are skipped, null keeps all. */
+    internal fun onLocation(location: Location, maxAccuracyM: Float?) {
         val s = _state.value
         if (s.status != Status.RECORDING) return
-        if (location.hasAccuracy() && location.accuracy > MAX_ACCURACY_M) return
+        if (maxAccuracyM != null && location.hasAccuracy() && location.accuracy > maxAccuracyM) return
         val p = LatLon(location.latitude, location.longitude)
         val last = s.points.lastOrNull()
         val step = last?.let { Geodesy.distance(it, p) } ?: 0.0
@@ -391,6 +392,5 @@ object TrackRecorder {
         context.stopService(Intent(context, RecordingService::class.java))
     }
 
-    private const val MAX_ACCURACY_M = 35f
     private const val MIN_SPACING_M = 5.0
 }

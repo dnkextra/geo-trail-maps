@@ -48,6 +48,7 @@ import androidx.compose.ui.window.DialogProperties
 import org.geotrailmaps.data.CoordinateFormat
 import org.geotrailmaps.data.Formats
 import org.geotrailmaps.data.Settings
+import org.geotrailmaps.data.TrackAccuracy
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.geo.LatLon
 import org.geotrailmaps.render.BasemapSource
@@ -67,6 +68,7 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val format by settings.coordinateFormat.collectAsState()
     val units by settings.units.collectAsState()
+    val trackAccuracy by settings.trackAccuracy.collectAsState()
     val defaultBasemap by settings.defaultBasemap.collectAsState()
     val basemaps by settings.basemaps.collectAsState()
     val customBasemaps by settings.customBasemaps.collectAsState()
@@ -105,6 +107,12 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
             Column(Modifier.selectableGroup()) {
                 for (u in Units.entries) {
                     Choice(u.label, Formats.distance(1234.0, u), selected = u == units) { settings.setUnits(u) }
+                }
+            }
+            SectionTitle("GPS points kept when recording a track")
+            Column(Modifier.selectableGroup()) {
+                for (a in TrackAccuracy.entries) {
+                    Choice(a.label, a.detail, selected = a == trackAccuracy) { settings.setTrackAccuracy(a) }
                 }
             }
             SectionTitle("Background map for new maps")

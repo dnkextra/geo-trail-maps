@@ -502,7 +502,8 @@ private fun MapContent(
     }
 
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    // Approximate location is too coarse for the recorder's accuracy filter: no points would be kept.
+    // Approximate location is too coarse for a track: the accuracy filter would keep no points
+    // (or, set to keep every point, ones a kilometre or more off).
     fun hasPreciseLocation() = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     fun askForPreciseLocation() {
         showMessage("Recording a track needs precise location. Allow it, then try again.")

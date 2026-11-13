@@ -105,6 +105,15 @@ class Settings(context: Context) {
         _units.value = value
     }
 
+    private val _trackAccuracy = MutableStateFlow(enumOrDefault(prefs.getString("trackAccuracy", null), TrackAccuracy.NORMAL))
+    /** Read by the recorder for each fix, so a change applies to a recording already running. */
+    val trackAccuracy: StateFlow<TrackAccuracy> = _trackAccuracy
+
+    fun setTrackAccuracy(value: TrackAccuracy) {
+        prefs.edit { putString("trackAccuracy", value.name) }
+        _trackAccuracy.value = value
+    }
+
     private inline fun <reified T : Enum<T>> enumOrDefault(name: String?, default: T): T =
         enumValues<T>().firstOrNull { it.name == name } ?: default
 }
