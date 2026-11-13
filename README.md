@@ -34,7 +34,7 @@ An offline Android map viewer for geospatial PDFs, often called GeoPDFs. It open
 - **Import**: add GPX, KML or KMZ files: waypoints, tracks, routes, paths and polygons. Each file becomes a layer under *Layers* (a GPX track or KML placemark in several parts stays one track, with gaps between the parts), hidden at first so it doesn't cover the map, and you can show, rename or delete a whole layer or anything in it. *Show on all maps* makes a layer appear on every map it overlaps instead of just this one.
 - **Export**: share features as KML (each imported layer becomes a folder) or GPX.
 - **Background map**: OpenStreetMap or satellite tiles, or tiles from a source you add in Settings (an `https://…/{z}/{x}/{y}` address), drawn under and around the PDF, so you can see what's beyond the map's edges. Tiles you've viewed are cached and may show offline; areas or zoom levels not viewed online won't. Each map remembers its own choice (or none) under *Layers → Background map*.
-- **Settings**: choose the coordinate format (decimal, DMS, DDM, UTM) and metric or imperial units. Choose which GPS points a recording keeps: those accurate to within 35 m (the default) or 100 m, or every point.
+- **Settings**: choose the coordinate format (decimal, DMS, DDM, UTM) and metric or imperial units. Choose the GPS accuracy a track point needs to be recorded: 35 m or better (the default), 100 m or better, or any accuracy.
 
 Requires Android 13 (API 33) or later. Doesn't need Google Play Services. The only feature that uses the network is the optional background map.
 

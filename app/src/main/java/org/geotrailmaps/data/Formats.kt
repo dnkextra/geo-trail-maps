@@ -19,7 +19,7 @@ enum class Units(val label: String) { METRIC("Metric"), IMPERIAL("Imperial") }
 enum class TrackAccuracy(val maxMeters: Float?) {
     NORMAL(35f), LOOSE(100f), ALL(null);
 
-    fun label(units: Units) = maxMeters?.let { "Within ${Formats.distance(it.toDouble(), units)}" } ?: "Keep every point"
+    fun label(units: Units) = maxMeters?.let { "${Formats.distance(it.toDouble(), units)} or better" } ?: "Any accuracy"
 }
 
 enum class MapSort(val label: String) { NAME("Name"), DISTANCE("Distance from you"), RECENT("Recently added") }

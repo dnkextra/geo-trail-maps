@@ -109,7 +109,7 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                     Choice(u.label, Formats.distance(1234.0, u), selected = u == units) { settings.setUnits(u) }
                 }
             }
-            SectionTitle("GPS points kept when recording a track")
+            SectionTitle("GPS accuracy needed to record a point")
             Column(Modifier.selectableGroup()) {
                 for (a in TrackAccuracy.entries) {
                     Choice(a.label(units), null, selected = a == trackAccuracy) { settings.setTrackAccuracy(a) }
