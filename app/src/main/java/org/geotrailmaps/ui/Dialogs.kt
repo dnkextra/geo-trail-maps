@@ -49,7 +49,7 @@ const val ROUTE_NOTICE_TITLE = "When using a route, please keep in mind:"
 const val ROUTE_NOTICE_TEXT =
     "• The app doesn't account for real-world conditions or safety.\n" +
         "• Routes are based on map lines and may not be optimal or traversable.\n" +
-        "• Trail maps can be inaccurate, so distance estimates may be off.\n\n" +
+        "• Trail maps may be inaccurate, so distance estimates may also be inaccurate.\n\n" +
         "Please be discerning and stay safe!"
 
 /** The route notice. Only OK closes it, so it isn't dismissed unread by a stray tap. */
