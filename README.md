@@ -2,20 +2,6 @@
 
 An offline Android map viewer for geospatial PDFs, with GPS, track recording and trail distances.
 
-## License
-
-Original project code, documentation, and artwork are available under the
-[MIT License](LICENSE), including for commercial use. Third-party components,
-test maps, and online map services retain their own terms; see
-[Third-party notices](THIRD_PARTY_NOTICES.md).
-
-The APK bundles `LICENSE`, `THIRD_PARTY_NOTICES.md`, and the Apache License text,
-shown under Settings → Open-source licenses. When distributing an APK, also
-include them and the `licenses/` directory in the accompanying distribution
-materials. Keep the on-map provider credits visible. Review the notices when
-changing dependencies or map providers; release builds fail if a runtime
-dependency isn't covered (`./gradlew checkLegalNotices`).
-
 ## What it does
 
 An offline Android map viewer for geospatial PDFs, often called GeoPDFs. It opens the PDF maps that Avenza Maps imports and exports.
@@ -116,3 +102,17 @@ The parser reads the control points from the PDF: GPTS lat/lon paired with LPTS 
 - GeoTIFF, multi-page PDFs (only page 1 is used; import says so) and password-protected PDFs aren't supported.
 - Datum shifts are ignored: NAD83 and WGS84 are treated as the same. Old NAD27 maps can be off by tens of metres; import and *Map info* warn when the coordinate system names such a datum.
 - There's no backup and restore inside the app. Android's backup may include maps and tracks but is limited to 25 MB per app; export features (GPX/KML) and keep the original PDFs before switching phones.
+
+## License
+
+Original project code, documentation, and artwork are available under the
+[MIT License](LICENSE), including for commercial use. Third-party components,
+test maps, and online map services retain their own terms; see
+[Third-party notices](THIRD_PARTY_NOTICES.md).
+
+The APK bundles `LICENSE`, `THIRD_PARTY_NOTICES.md`, and the Apache License text,
+shown under Settings → Open-source licenses. When distributing an APK, also
+include them and the `licenses/` directory in the accompanying distribution
+materials. Keep the on-map provider credits visible. Review the notices when
+changing dependencies or map providers; release builds fail if a runtime
+dependency isn't covered (`./gradlew checkLegalNotices`).
