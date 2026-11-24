@@ -27,10 +27,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LifecycleStartEffect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import org.geotrailmaps.data.ImportException
 import org.geotrailmaps.data.MapLibrary
@@ -153,6 +160,26 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
     }
     var importing by remember { mutableStateOf(false) }
 
+    // Start on the map left open last time, if you're on or near it. Read before the effect
+    // below records the current (empty) screen.
+    val lastMapId = remember { app.settings.lastOpenMap }
+    var reopenChecked by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (reopenChecked) return@LaunchedEffect
+        reopenChecked = true
+        if (!app.settings.reopenLastMap.value || incoming.value != null) return@LaunchedEffect
+        val geo = lastMapId?.let(app.library::get)?.geo ?: return@LaunchedEffect
+        // Wait briefly for a fix, but give up as soon as you go somewhere yourself.
+        val fix = withTimeoutOrNull(REOPEN_WAIT_MS) {
+            merge(
+                app.tracker.location.filterNotNull(),
+                snapshotFlow { openMapId != null || showSettings || showTracks || importing }.filter { it }.map { null },
+            ).first()
+        } ?: return@LaunchedEffect
+        if (geo.distanceFromMap(LatLon(fix.latitude, fix.longitude)) <= REOPEN_NEAR_METERS) openMapId = lastMapId
+    }
+    LaunchedEffect(openMapId) { app.settings.lastOpenMap = openMapId }
+
     /** Imports [uris] one by one. A single map opens; several stay in the list, with a summary. */
     fun import(uris: List<Uri>) = scope.launch {
         importing = true
@@ -262,3 +289,9 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
         )
     }
 }
+
+/** How long to wait at startup for a location fix before staying on My Maps. */
+private const val REOPEN_WAIT_MS = 8_000L
+
+/** How close to the last map's area you must be for the app to start on it. */
+private const val REOPEN_NEAR_METERS = 2_000.0

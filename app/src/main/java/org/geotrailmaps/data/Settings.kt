@@ -87,6 +87,20 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("routeNoticeShown", false)
         set(value) = prefs.edit { putBoolean("routeNoticeShown", value) }
 
+    private val _reopenLastMap = MutableStateFlow(prefs.getBoolean("reopenLastMap", true))
+    /** Whether the app starts on the map left open last time, when you're on or near it. */
+    val reopenLastMap: StateFlow<Boolean> = _reopenLastMap
+
+    fun setReopenLastMap(value: Boolean) {
+        prefs.edit { putBoolean("reopenLastMap", value) }
+        _reopenLastMap.value = value
+    }
+
+    /** The map open when the app was last used; null if it was left on another screen. */
+    var lastOpenMap: String?
+        get() = prefs.getString("lastOpenMap", null)
+        set(value) = prefs.edit { putString("lastOpenMap", value) }
+
     private val _mapSort = MutableStateFlow(enumOrDefault(prefs.getString("mapSort", null), MapSort.NAME))
     val mapSort: StateFlow<MapSort> = _mapSort
 

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -29,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -69,6 +71,7 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
     val format by settings.coordinateFormat.collectAsState()
     val units by settings.units.collectAsState()
     val trackAccuracy by settings.trackAccuracy.collectAsState()
+    val reopenLastMap by settings.reopenLastMap.collectAsState()
     val defaultBasemap by settings.defaultBasemap.collectAsState()
     val basemaps by settings.basemaps.collectAsState()
     val customBasemaps by settings.customBasemaps.collectAsState()
@@ -109,6 +112,13 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                     Choice(u.label, Formats.distance(1234.0, u), selected = u == units) { settings.setUnits(u) }
                 }
             }
+            SectionTitle("Startup")
+            ListItem(
+                headlineContent = { Text("Reopen the last map") },
+                supportingContent = { Text("If a map was open when you left, start on it when you're on or near it") },
+                trailingContent = { Switch(checked = reopenLastMap, onCheckedChange = null) },
+                modifier = Modifier.toggleable(reopenLastMap, role = Role.Switch, onValueChange = settings::setReopenLastMap),
+            )
             SectionTitle("GPS accuracy needed to record a point")
             Column(Modifier.selectableGroup()) {
                 for (a in TrackAccuracy.entries) {
