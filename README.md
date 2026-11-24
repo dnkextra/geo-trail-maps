@@ -60,9 +60,7 @@ The signing material lives outside the repo:
 
 The build looks first for a copy of `release.keystore` and `credentials.env` in the project root, then in that folder. Both are gitignored. To use another location, pass `-PgeoTrailMaps.signingDir=...` or set `GEO_TRAIL_MAPS_SIGNING_DIR`.
 
-That folder is backed up in Bitwarden as the secure note `geo-trail-maps — release signing`, in the `Agent-managed` folder. The note holds a base64-encoded `.tar.gz` of the folder, and its hidden fields hold the keystore passwords and alias. To restore, decode the archive into `~/sandbox/.signing/geo-trail-maps/`.
-
-**Update that backup whenever the key or credentials change.** Android identifies an app by its signing key. If you lose the key, no future build can install over an existing one, and the only fix is to uninstall and reinstall, which deletes all imported maps and placemarks.
+**Keep a backup of that folder, and update it whenever the key or credentials change.** Android identifies an app by its signing key. If you lose the key, no future build can install over an existing one, and the only fix is to uninstall and reinstall, which deletes all imported maps and placemarks.
 
 If the build can't find the key, `assembleRelease` fails at `preReleaseBuild`. An APK signed with any other key can't update an existing install (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), so check the certificate fingerprint above before publishing. Debug builds don't need the key.
 
