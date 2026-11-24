@@ -1,0 +1,13 @@
+#!/bin/sh
+# Check every commit and annotated tag about to be pushed, so commits made by
+# rebase, cherry-pick or --no-verify are still caught.
+zero=0000000000000000000000000000000000000000
+check="$(dirname "$0")/check-emails.sh"
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue  # deleting a remote ref
+    if [ "$(git cat-file -t "$local_sha")" = tag ]; then
+        git cat-file tag "$local_sha" | sh "$check" "tag $local_ref" || exit 1
+    fi
+    git log --format='%an <%ae>%n%cn <%ce>%n%B' "$local_sha" --not --remotes="$1" |
+        sh "$check" "a commit in $local_ref" || exit 1
+done

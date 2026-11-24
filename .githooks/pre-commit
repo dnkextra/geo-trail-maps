@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuse to commit under an identity whose email isn't a noreply address.
+{ git var GIT_AUTHOR_IDENT; git var GIT_COMMITTER_IDENT; } |
+    sh "$(dirname "$0")/check-emails.sh" "the commit identity"

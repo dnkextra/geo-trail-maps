@@ -1,0 +1,3 @@
+#!/bin/sh
+# Refuse commit messages (including trailers) that hold a non-noreply email address.
+grep -v '^#' "$1" | sh "$(dirname "$0")/check-emails.sh" "the commit message"
