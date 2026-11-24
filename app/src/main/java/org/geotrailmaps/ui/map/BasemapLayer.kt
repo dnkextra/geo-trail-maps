@@ -56,7 +56,7 @@ fun visibleTiles(proj: MapProjection, viewport: MapViewport, density: Float, max
 /**
  * Draws the background map. Each tile is warped onto its four projected corners, so it
  * lines up with the PDF whatever the PDF's projection. Missing tiles are filled from a
- * cached lower zoom level until they arrive.
+ * cached lower zoom level until they arrive, or for good where the source has none.
  */
 fun DrawScope.drawBasemap(tiles: BasemapTiles, source: BasemapSource, visible: List<Tile>, proj: MapProjection, paint: Paint) {
     @Suppress("UNUSED_EXPRESSION")
@@ -94,11 +94,11 @@ fun DrawScope.drawBasemap(tiles: BasemapTiles, source: BasemapSource, visible: L
         }
     }
 
-    // Lower-zoom stand-ins first, so exact tiles drawn afterwards cover their overspill.
+    // Lower-zoom stand-ins first, so exact tiles drawn afterwards cover their overspill. Any
+    // zoom out will do: where the source has no detail, an enlarged tile is all there is.
     for (tile in visible) {
         if (tiles.cached(source, tile) != null) continue
-        for (d in 1..4) {
-            if (tile.z - d < 0) break
+        for (d in 1..tile.z) {
             val ancestor = tiles.cached(source, Tile(tile.z - d, tile.x shr d, tile.y shr d)) ?: continue
             draw(tile, ancestor, d)
             break

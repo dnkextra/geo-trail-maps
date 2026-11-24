@@ -59,6 +59,25 @@ class TileTest {
     }
 
     @Test
+    fun arcGisAsksFor404sInsteadOfPlaceholders() {
+        val t = Tile(15, 8736, 15439)
+        val esri = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        assertEquals(
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/15/15439/8736?blankTile=false",
+            CustomBasemap("c", "n", esri, "", 19).toSource().url(t),
+        )
+        assertEquals(
+            "https://example.com/arcgis/rest/services/Topo/MapServer/tile/15/15439/8736?token=a&blankTile=false",
+            CustomBasemap("c", "n", "https://example.com/arcgis/rest/services/Topo/MapServer/tile/{z}/{y}/{x}?token=a", "", 19).toSource().url(t),
+        )
+        // Left alone if the address already says.
+        assertEquals("$esri?blankTile=true".replace("{z}/{y}/{x}", "15/15439/8736"), CustomBasemap("c", "n", "$esri?blankTile=true", "", 19).toSource().url(t))
+        assertEquals("https://tile.openstreetmap.org/15/8736/15439.png", BasemapSource.OSM.url(t))
+        // Tiles cached before, which may be placeholders, aren't reused.
+        assert(CustomBasemap("c", "n", esri, "", 19).toSource().cacheDir.endsWith("-nb"))
+    }
+
+    @Test
     fun tileAddressValidation() {
         assertEquals(null, BasemapSource.templateError("https://tiles.example.com/{z}/{x}/{y}.png"))
         assertEquals(null, BasemapSource.templateError("https://tiles.example.com/wmts/{z}/{y}/{x}.jpg?key=abc"))

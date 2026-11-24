@@ -77,7 +77,15 @@ data class BasemapSource(
     /** Cached tiles older than this are re-checked with the server; null for imagery that never changes. */
     val refreshAfterDays: Int?,
 ) {
-    fun url(t: Tile) = urlTemplate.replace("{z}", t.z.toString()).replace("{x}", t.x.toString()).replace("{y}", t.y.toString())
+    fun url(t: Tile) = fetchTemplate.replace("{z}", t.z.toString()).replace("{x}", t.x.toString()).replace("{y}", t.y.toString())
+
+    /**
+     * ArcGIS tile servers fill places they have no tile for with a "Map data not yet available"
+     * image unless asked not to; a 404 instead lets the map enlarge the next zoom out.
+     */
+    private val fetchTemplate: String =
+        if (!isArcGis(urlTemplate) || "blanktile=" in urlTemplate.lowercase()) urlTemplate
+        else urlTemplate + (if ('?' in urlTemplate) "&" else "?") + "blankTile=false"
 
     /** The server tiles are downloaded from, for privacy disclosures. */
     val host: String get() = hostOf(urlTemplate)
@@ -103,6 +111,8 @@ data class BasemapSource(
         )
 
         val builtIn = listOf(OSM, SATELLITE)
+
+        fun isArcGis(template: String) = "/mapserver/tile/" in template.lowercase()
 
         fun hostOf(template: String) = template.substringAfter("://").substringBefore('/').substringBefore('?').substringAfterLast('@').substringBefore(':')
 
@@ -133,7 +143,9 @@ data class CustomBasemap(
     fun toSource(): BasemapSource {
         val credit = attribution.ifBlank { "Tiles from " + BasemapSource.hostOf(urlTemplate) }
         // A changed address gets a new cache folder, so tiles from the old one are never shown for it.
-        val cacheDir = "tiles-custom-$id-" + Integer.toHexString(urlTemplate.hashCode())
+        // ArcGIS ones are fetched differently since 0.9.12, so caches holding its placeholder tiles go.
+        val cacheDir = "tiles-custom-$id-" + Integer.toHexString(urlTemplate.hashCode()) +
+            (if (BasemapSource.isArcGis(urlTemplate)) "-nb" else "")
         return BasemapSource(id, name, credit, credit, null, maxZoom, urlTemplate, cacheDir, "tile", 90)
     }
 }
@@ -154,6 +166,8 @@ class BasemapTiles(context: Context) {
     /** The latest visible set; queued tiles that have scrolled away are skipped. */
     @Volatile private var wanted: Set<Key> = emptySet()
     private val failedAt = HashMap<Key, Long>()
+    /** Tiles the server says it doesn't have (beyond its detail there); the next zoom out stands in. */
+    private val missing = HashSet<Key>()
     /** Cache folders of the current sources; see [pruneCaches]. */
     @Volatile private var cacheDirs: Set<String> = emptySet()
     /** Old cached tiles being re-checked; see [refresh]. */
@@ -178,12 +192,23 @@ class BasemapTiles(context: Context) {
 
     fun cached(source: BasemapSource, tile: Tile): Bitmap? = memory.get(Key(source, tile))
 
-    /** Makes [tiles] the visible set and queues the ones not loaded yet. Call from the main thread. */
+    /**
+     * Makes [tiles] the visible set and queues the ones not loaded yet, or for tiles the source
+     * doesn't have, the nearest zoom out that it does. Call from the main thread.
+     */
     fun request(source: BasemapSource, tiles: List<Tile>) {
-        val keys = tiles.map { Key(source, it) }
+        val keys = tiles.map { available(Key(source, it)) }.distinct()
         wanted = keys.toHashSet()
         keys.forEach(::enqueue)
     }
+
+    private fun available(key: Key): Key {
+        var k = key
+        while (k in missing && k.tile.z > 0) k = k.parent()
+        return k
+    }
+
+    private fun Key.parent() = Key(source, Tile(tile.z - 1, tile.x shr 1, tile.y shr 1))
 
     /** Drops everything queued, e.g. when the map is closed or the background map turned off. */
     fun cancelAll() {
@@ -208,23 +233,36 @@ class BasemapTiles(context: Context) {
         scope.launch {
             var skipped = false
             var stale = false
+            var knownMissing = false
             var bitmap = withContext(disk) {
-                if (key !in wanted) { skipped = true; null } else runCatching { readCached(key) }.getOrNull()
-                    ?.also { stale = isStale(key) }
+                when {
+                    key !in wanted -> { skipped = true; null }
+                    isMissing(key) -> { knownMissing = true; null }
+                    else -> runCatching { readCached(key) }.getOrNull()?.also { stale = isStale(key) }
+                }
             }
             var downloaded: Result<Bitmap?>? = null
-            if (bitmap == null && !skipped) {
+            if (bitmap == null && !skipped && !knownMissing) {
                 downloading++
                 bitmap = withContext(network) {
                     if (key !in wanted) { skipped = true; null } else runCatching { download(key) }.also { downloaded = it }.getOrNull()
                 }
                 downloading--
             }
-            downloaded?.let { r -> if (r.exceptionOrNull() is IOException) offline = true else if (r.getOrNull() != null) offline = false }
+            val gone = knownMissing || downloaded?.exceptionOrNull() is TileMissing
+            downloaded?.let { r -> if (r.exceptionOrNull() is IOException) offline = true else if (r.getOrNull() != null || gone) offline = false }
             inFlight -= key
             // Wanted again while it was being skipped: that request found it in flight.
             if (skipped) { if (key in wanted) enqueue(key); return@launch }
-            if (bitmap != null) {
+            if (gone) {
+                missing += key
+                failedAt.remove(key)
+                if (key in wanted && key.tile.z > 0) {
+                    val parent = available(key.parent())
+                    wanted = wanted + parent
+                    enqueue(parent)
+                }
+            } else if (bitmap != null) {
                 memory.put(key, bitmap)
                 failedAt.remove(key)
                 version++
@@ -267,7 +305,18 @@ class BasemapTiles(context: Context) {
 
     private fun readCached(key: Key): Bitmap? {
         val file = key.source.cacheFile(cacheRoot, key.tile)
-        return if (file.isFile) BitmapFactory.decodeFile(file.path) else null
+        return if (file.isFile && file.length() > 0) BitmapFactory.decodeFile(file.path) else null
+    }
+
+    /**
+     * An empty cache file records that the server had no such tile, so it isn't asked again,
+     * even offline, until the source's refresh period has passed.
+     */
+    private fun isMissing(key: Key): Boolean {
+        val file = key.source.cacheFile(cacheRoot, key.tile)
+        if (!file.isFile || file.length() > 0L) return false
+        val days = key.source.refreshAfterDays ?: return true
+        return System.currentTimeMillis() - file.lastModified() < days * DAY_MS
     }
 
     /** With [revalidate], returns null if the cached copy is still current, and marks it as checked. */
@@ -283,6 +332,12 @@ class BasemapTiles(context: Context) {
                 file.setLastModified(System.currentTimeMillis())
                 return null
             }
+            if (conn.responseCode in NO_TILE) {
+                // On a revalidation the cached tile stays: it's still the best there is.
+                if (revalidate) return null
+                runCatching { file.parentFile?.mkdirs(); file.writeBytes(ByteArray(0)) }
+                throw TileMissing()
+            }
             if (conn.responseCode != 200) return null
             val bytes = conn.inputStream.use { it.readNBytes(MAX_TILE_BYTES + 1) }
             if (bytes.size > MAX_TILE_BYTES) return null
@@ -295,7 +350,12 @@ class BasemapTiles(context: Context) {
         }
     }
 
+    /** The server has no tile at that address; not a connection problem. */
+    private class TileMissing : Exception()
+
     private companion object {
+        /** Responses that mean there's no tile there, rather than a problem that may pass. */
+        val NO_TILE = setOf(HttpURLConnection.HTTP_NO_CONTENT, HttpURLConnection.HTTP_NOT_FOUND, HttpURLConnection.HTTP_GONE)
         const val RETRY_MS = 30_000L
         const val REFRESH_WAIT_MS = 500L
         /** Far larger than any real tile; a custom source could send anything. */
