@@ -165,7 +165,9 @@ import org.geotrailmaps.data.MapLibrary
 import org.geotrailmaps.data.Settings
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.ui.RouteNoticeDialog
-import org.geotrailmaps.ui.shareFeatures
+import org.geotrailmaps.ui.ExportDialog
+import org.geotrailmaps.ui.exportFeatures
+import org.geotrailmaps.ui.shareExport
 import org.geotrailmaps.data.overlaps
 import org.geotrailmaps.geo.GeoReference
 import org.geotrailmaps.geo.Geodesy
@@ -400,6 +402,7 @@ private fun MapContent(
     /** Which groups are open in the Features list, kept while the map is open. */
     val expandedGroups = remember { mutableStateMapOf<String, Boolean>() }
     var showInfo by remember { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf(false) }
     val tilePaint = remember { android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG) }
     // System bars and cutouts, but not the keyboard: the map's controls must not jump when a
     // sheet's text field opens the keyboard.
@@ -1025,13 +1028,7 @@ private fun MapContent(
                     onImport = { importLauncher.launch(IMPORT_TYPES) },
                     onSavePdf = { savePdfLauncher.launch(entry.name.replace('/', '_') + ".pdf") },
                     onZoomToMap = { following = false; viewport.fit() },
-                    onExport = { kml ->
-                        val features = session.features.toList()
-                        val layers = session.layers.toList()
-                        scope.launch {
-                            if (!shareFeatures(context, entry.name, features, layers, kml)) showMessage("Couldn't export the features. Storage may be full.")
-                        }
-                    },
+                    onExport = { exporting = true },
                 )
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)),
@@ -1531,6 +1528,24 @@ private fun MapContent(
     }
 
     if (showInfo) MapInfoDialog(entry, myLatLon, format, units, basemapSource) { showInfo = false }
+    if (exporting) ExportDialog(
+        defaultName = entry.name,
+        features = session.features,
+        layers = session.layers,
+        onDownload = { name, kml, chosen ->
+            exporting = false
+            val layers = session.layers.toList()
+            scope.launch {
+                val result = exportFeatures(context, name, chosen, layers.filter { l -> chosen.any { it.layerId == l.id } }, kml)
+                when {
+                    result == null -> showMessage("Couldn't export the features. Storage may be full.")
+                    result.savedAs == null -> shareExport(context, result.export)
+                    replaceMessage("Saved ${result.savedAs} to Downloads", "Share", SnackbarDuration.Long) -> shareExport(context, result.export)
+                }
+            }
+        },
+        onDismiss = { exporting = false },
+    )
 }
 
 @Composable
@@ -1540,7 +1555,7 @@ private fun MapMenu(
     onImport: () -> Unit,
     onSavePdf: () -> Unit,
     onZoomToMap: () -> Unit,
-    onExport: (kml: Boolean) -> Unit,
+    onExport: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -1548,8 +1563,7 @@ private fun MapMenu(
         DropdownMenu(open, onDismissRequest = { open = false }) {
             DropdownMenuItem(text = { Text("Zoom to whole map") }, onClick = { open = false; onZoomToMap() })
             DropdownMenuItem(text = { Text("Import GPX / KML…") }, enabled = canImport, onClick = { open = false; onImport() })
-            DropdownMenuItem(text = { Text("Export features (KML)") }, enabled = canExport, onClick = { open = false; onExport(true) })
-            DropdownMenuItem(text = { Text("Export features (GPX)") }, enabled = canExport, onClick = { open = false; onExport(false) })
+            DropdownMenuItem(text = { Text("Download features…") }, enabled = canExport, onClick = { open = false; onExport() })
             DropdownMenuItem(text = { Text("Export PDF…") }, onClick = { open = false; onSavePdf() })
         }
     }

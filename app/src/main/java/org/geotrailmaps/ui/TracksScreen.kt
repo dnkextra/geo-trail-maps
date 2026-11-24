@@ -23,8 +23,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -83,6 +85,7 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
     }
     var saving by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<Feature?>(null) }
+    var exportingTrack by remember { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     val coverages = remember(maps) { maps.mapNotNull { m -> m.coverage()?.let { m to it } } }
 
@@ -156,11 +159,7 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
                         onMap = map?.name,
                         onOpen = map?.let { m -> { onOpenMap(m.id) } },
                         onRename = { renaming = f },
-                        onExport = { kml ->
-                            scope.launch {
-                                if (!shareFeatures(context, f.name, listOf(f), listOf(layer), kml)) show("Couldn't export the track. Storage may be full.")
-                            }
-                        },
+                        onExport = { exportingTrack = f.id },
                         onDelete = {
                             deleting = "Delete \"${f.name}\"? This can't be undone." to {
                                 library.updateGlobal { it.removeFeature(f.id) }
@@ -226,6 +225,39 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
         )
     }
 
+    // Looked up each time, so a track that changes while the dialog is open is exported as it is then.
+    exportingTrack?.let { id ->
+        val track = global.features.firstOrNull { it.id == id }
+        val layer = global.layers.firstOrNull { it.id == track?.layerId }
+        // Deleted meanwhile: nothing to show.
+        if (track == null || layer == null) return@let
+        ExportDialog(
+            defaultName = track.name,
+            features = listOf(track),
+            layers = listOf(layer),
+            // Tracks lists every global layer, so this can be a placemark or area too.
+            title = if (track.track != null) "Download track" else "Download feature",
+            defaultKml = false,
+            onDownload = { name, kml, chosen ->
+                exportingTrack = null
+                scope.launch {
+                    val result = exportFeatures(context, name, chosen, listOf(layer), kml)
+                    when {
+                        result == null -> show("Couldn't export the track. Storage may be full.")
+                        result.savedAs == null -> shareExport(context, result.export)
+                        else -> {
+                            snackbar.currentSnackbarData?.dismiss()
+                            if (snackbar.showSnackbar("Saved ${result.savedAs} to Downloads", "Share", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) {
+                                shareExport(context, result.export)
+                            }
+                        }
+                    }
+                }
+            },
+            onDismiss = { exportingTrack = null },
+        )
+    }
+
     deleting?.let { (question, apply) ->
         ConfirmDeleteDialog(text = question, onDelete = { apply(); deleting = null }, onDismiss = { deleting = null })
     }
@@ -248,7 +280,7 @@ private fun TrackRow(
     onMap: String?,
     onOpen: (() -> Unit)?,
     onRename: () -> Unit,
-    onExport: (kml: Boolean) -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit,
 ) {
     // A sum over every point: not redone each time the screen recomposes (every GPS fix while recording).
@@ -273,8 +305,7 @@ private fun TrackRow(
                 IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "Options for ${f.name}") }
                 DropdownMenu(menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
-                    DropdownMenuItem(text = { Text("Export GPX") }, onClick = { menu = false; onExport(false) })
-                    DropdownMenuItem(text = { Text("Export KML") }, onClick = { menu = false; onExport(true) })
+                    DropdownMenuItem(text = { Text("Download…") }, onClick = { menu = false; onExport() })
                     DropdownMenuItem(text = { Text("Delete") }, onClick = { menu = false; onDelete() })
                 }
             }
