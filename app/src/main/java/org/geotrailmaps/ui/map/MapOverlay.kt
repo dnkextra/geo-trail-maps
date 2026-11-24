@@ -88,17 +88,36 @@ fun DrawScope.drawFeatures(features: List<Feature>, selectedId: String?, geometr
     }
 }
 
+/**
+ * A teardrop pin: a round head narrowing to a point at [tip]. The point sets it apart from
+ * the round location dot even at a glance.
+ */
 private fun DrawScope.drawPin(tip: Offset, color: Color, selected: Boolean) {
     val r = MapStyle.pinRadius.toPx()
     val head = tip - Offset(0f, MapStyle.pinHeight.toPx() - r)
-    if (selected) drawCircle(MapStyle.selectionHalo, r * 1.8f, head)
-    drawLine(Color(0xFF424242), tip, head, strokeWidth = 2.5f * density, cap = StrokeCap.Round)
-    drawCircle(Color.White, r + 2f * density, head)
-    drawCircle(color, r, head)
+    val path = teardrop(tip, head, r)
+    if (selected) drawPath(path, MapStyle.selectionHalo, style = Stroke(r * 1.4f, join = StrokeJoin.Round))
     drawCircle(Color.Black.copy(alpha = 0.35f), 2f * density, tip)
+    // White casing, with a thin dark rim so it still shows on white paper.
+    drawPath(path, Color.Black.copy(alpha = 0.3f), style = Stroke(5f * density, join = StrokeJoin.Round))
+    drawPath(path, Color.White, style = Stroke(4f * density, join = StrokeJoin.Round))
+    drawPath(path, color)
+    drawCircle(Color.White, r * 0.38f, head)
 }
 
-/** The measurement; along trails, [route] is drawn solid where it follows a trail and dashed elsewhere. */
+/** The outline of a circle of radius [r] around [head], with tangents meeting at [tip] below it. */
+private fun teardrop(tip: Offset, head: Offset, r: Float): Path {
+    val d = (tip - head).getDistance()
+    // Angle between "straight down" and each tangent point, seen from the centre.
+    val a = Math.toDegrees(kotlin.math.acos((r / d).coerceAtMost(1f)).toDouble()).toFloat()
+    return Path().apply {
+        moveTo(tip.x, tip.y)
+        // From the right tangent point, anticlockwise over the top to the left one.
+        arcTo(Rect(head, r), 90f - a, -(360f - 2 * a), forceMoveTo = false)
+        close()
+    }
+}
+
 fun DrawScope.drawMeasurement(points: List<LatLon>, area: Boolean, proj: MapProjection, route: TrailRoute? = null) {
     if (points.isEmpty()) return
     val pts = points.map(proj::toScreen)

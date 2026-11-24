@@ -66,8 +66,8 @@ object MapStyle {
 
     val lineWidth = 4.dp
     val areaFillAlpha = 0.2f
-    val pinRadius = 9.dp
-    val pinHeight = 30.dp
+    val pinRadius = 10.dp
+    val pinHeight = 28.dp
     val selectionHalo = Color(0xFFFFEB3B)
 
     /** Colours offered for placemarks, lines and areas (names are read by screen readers). */
