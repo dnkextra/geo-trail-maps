@@ -439,6 +439,7 @@ class MapLibrary(private val context: Context) {
         .put("folder", f.folder ?: JSONObject.NULL)
         .put("trail", f.trail)
         .apply { f.icon?.let { put("icon", it) } }
+        .apply { f.time?.let { put("time", it) } }
         .put("points", JSONArray().apply { f.points.forEach { put(JSONArray(listOf(it.lat, it.lon))) } })
 
     private fun layerToJson(l: FeatureLayer) = JSONObject()
@@ -484,20 +485,24 @@ class MapLibrary(private val context: Context) {
 
     private fun featureFromJson(o: JSONObject): Feature {
         val pts = o.getJSONArray("points")
+        val type = FeatureType.valueOf(o.getString("type"))
+        val createdAt = o.getLong("createdAt")
         return Feature(
             id = o.getString("id"),
-            type = FeatureType.valueOf(o.getString("type")),
+            type = type,
             name = o.getString("name"),
             description = o.optString("description"),
             points = List(pts.length()) { i -> pts.getJSONArray(i).let { LatLon(it.getDouble(0), it.getDouble(1)) } },
             color = o.getInt("color"),
-            createdAt = o.getLong("createdAt"),
+            createdAt = createdAt,
             layerId = o.optStringOrNull("layerId"),
             track = o.optJSONObject("track")?.let(::trackFromJson),
             visible = o.optBoolean("visible", true),
             folder = o.optStringOrNull("folder"),
             trail = o.optBoolean("trail", false),
             icon = o.optStringOrNull("icon"),
+            // Points saved before they had a time mark when they were added.
+            time = if (o.has("time")) o.getLong("time") else if (type == FeatureType.POINT) createdAt else null,
         )
     }
 }

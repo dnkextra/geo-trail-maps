@@ -15,7 +15,7 @@ data class Feature(
     val points: List<LatLon>,
     /** ARGB colour. */
     val color: Int,
-    /** When it was added; for a point, the time shown (and changed) in its sheet, e.g. when something was seen. */
+    /** When it was added. Never changed, not shown, but exported (KML) so it travels with it. */
     val createdAt: Long = System.currentTimeMillis(),
     /** The layer this belongs to; null for features drawn in the app ("My features"). */
     val layerId: String? = null,
@@ -32,6 +32,8 @@ data class Feature(
     val trail: Boolean = false,
     /** For points: an emoji drawn in the pin's head instead of its dot; null for none. */
     val icon: String? = null,
+    /** For points: the time it marks (e.g. when something was seen), changeable like its name; starts as when it was added. Null for lines and areas. */
+    val time: Long? = if (type == FeatureType.POINT) createdAt else null,
 ) {
     /** The points split where a track was paused or continued from elsewhere; one list for anything else. */
     val segments: List<List<LatLon>>

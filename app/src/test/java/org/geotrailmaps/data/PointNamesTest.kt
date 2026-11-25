@@ -53,9 +53,17 @@ class PointNamesTest {
 
     @Test
     fun pointTimeSurvivesExport() {
-        val t = 1_790_000_000_000L
-        val f = Feature(type = FeatureType.POINT, name = "Rattlesnake", points = listOf(LatLon(49.0, -120.0)), color = 0, createdAt = t)
-        assertEquals(t, FeatureImport.parse("a.kml", FeatureExport.kml("Trip", listOf(f)).toByteArray(), 0).features.single().createdAt)
-        assertEquals(t, FeatureImport.parse("a.gpx", FeatureExport.gpx("Trip", listOf(f)).toByteArray(), 0).features.single().createdAt)
+        // With milliseconds, which the export keeps.
+        val added = 1_790_000_000_123L
+        val seen = added - 3_600_000L + 456
+        val f = Feature(type = FeatureType.POINT, name = "Rattlesnake", points = listOf(LatLon(49.0, -120.0)), color = 0, createdAt = added, time = seen)
+        val kml = FeatureImport.parse("a.kml", FeatureExport.kml("Trip", listOf(f)).toByteArray(), 0).features.single()
+        assertEquals(seen, kml.time)
+        assertEquals(added, kml.createdAt) // kept, not the import time
+        // GPX has a place for the point's time only.
+        assertEquals(seen, FeatureImport.parse("a.gpx", FeatureExport.gpx("Trip", listOf(f)).toByteArray(), 0).features.single().time)
+        // A new point's time starts as when it was added; lines have none.
+        assertEquals(added, Feature(type = FeatureType.POINT, name = "", points = f.points, color = 0, createdAt = added).time)
+        assertEquals(null, Feature(type = FeatureType.LINE, name = "", points = f.points, color = 0).time)
     }
 }

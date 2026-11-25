@@ -64,9 +64,11 @@ object FeatureImport {
         }
         for (wpt in root.children("wpt")) {
             val p = gpxPoint(wpt) ?: continue
+            val now = System.currentTimeMillis()
             out += Feature(
                 type = FeatureType.POINT, name = wpt.childText("name") ?: "Waypoint", description = gpxDescription(wpt), points = listOf(p), color = color, layerId = layerId,
-                createdAt = wpt.childText("time")?.let(::parseTime) ?: System.currentTimeMillis(),
+                createdAt = now,
+                time = wpt.childText("time")?.let(::parseTime) ?: now,
             )
         }
         for ((i, trk) in root.children("trk").withIndex()) {
@@ -94,10 +96,12 @@ object FeatureImport {
             val desc = pm.childText("description")?.let(::stripHtml).orEmpty()
             // A point's icon, as this app exports it: one character, so other apps' "icon" data
             // (such as an image URL) is ignored rather than turned into its first letter.
-            val icon = pm.children("ExtendedData").flatMap { it.children("Data") }
-                .firstOrNull { it.getAttribute("name") == "icon" }?.childText("value")
-                ?.let { v -> PointIcons.first(v)?.takeIf { it == v.trim() } }
-            // A point's time, as this app exports it.
+            val data = pm.children("ExtendedData").flatMap { it.children("Data") }
+            fun data(key: String) = data.firstOrNull { it.getAttribute("name") == key }?.childText("value")
+            val icon = data("icon")?.let { v -> PointIcons.first(v)?.takeIf { it == v.trim() } }
+            // When it was first added, as this app exports it; otherwise it's added now.
+            val createdAt = data("createdAt")?.let(::parseTime) ?: System.currentTimeMillis()
+            // A point's time.
             val time = pm.children("TimeStamp").firstOrNull()?.childText("when")?.let(::parseTime)
             val geometries = ArrayList<Geometry>()
             pm.children().forEach { collectGeometry(it, geometries) }
@@ -120,7 +124,8 @@ object FeatureImport {
                     track = g.track,
                     folder = folder,
                     icon = if (g.type == FeatureType.POINT) icon else null,
-                    createdAt = time?.takeIf { g.type == FeatureType.POINT } ?: System.currentTimeMillis(),
+                    createdAt = createdAt,
+                    time = if (g.type == FeatureType.POINT) time ?: createdAt else null,
                 )
             }
         }

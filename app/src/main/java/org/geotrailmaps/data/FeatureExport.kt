@@ -1,9 +1,6 @@
 package org.geotrailmaps.data
 
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
+import java.time.Instant
 
 /** Writes features as KML or GPX, the formats Avenza and most GIS tools exchange. */
 object FeatureExport {
@@ -32,12 +29,15 @@ object FeatureExport {
             appendLine("<name>${esc(f.name)}</name>")
             if (f.description.isNotBlank()) appendLine("<description>${esc(f.description)}</description>")
             // A point's time (set in its sheet); read back on import.
-            if (f.type == FeatureType.POINT) appendLine("<TimeStamp><when>${isoTime(f.createdAt)}</when></TimeStamp>")
+            if (f.time != null) appendLine("<TimeStamp><when>${isoTime(f.time)}</when></TimeStamp>")
             appendLine("<Style><IconStyle><color>$color</color></IconStyle>")
             appendLine("<LineStyle><color>$color</color><width>3</width></LineStyle>")
             appendLine("<PolyStyle><color>${"55" + color.substring(2)}</color></PolyStyle></Style>")
-            // A point's emoji, read back on import (KML orders ExtendedData before the geometry).
-            if (f.type == FeatureType.POINT && f.icon != null) appendLine("<ExtendedData><Data name=\"icon\"><value>${esc(f.icon)}</value></Data></ExtendedData>")
+            // When it was added, and a point's emoji; read back on import (KML orders ExtendedData
+            // before the geometry).
+            append("<ExtendedData><Data name=\"createdAt\"><value>${isoTime(f.createdAt)}</value></Data>")
+            if (f.type == FeatureType.POINT && f.icon != null) append("<Data name=\"icon\"><value>${esc(f.icon)}</value></Data>")
+            appendLine("</ExtendedData>")
             // Include elevations when known (KML's default altitude mode keeps them on the ground).
             fun coords(indices: IntRange) = indices.joinToString(" ") { i ->
                 val p = f.points[i]
@@ -74,7 +74,7 @@ object FeatureExport {
         for (f in features.filter { it.type == FeatureType.POINT }) {
             val p = f.points.first()
             appendLine("""<wpt lat="${p.lat}" lon="${p.lon}">""")
-            appendLine("<time>${isoTime(f.createdAt)}</time>")
+            f.time?.let { appendLine("<time>${isoTime(it)}</time>") }
             appendLine("<name>${esc(f.name)}</name>")
             if (f.description.isNotBlank()) appendLine("<desc>${esc(f.description)}</desc>")
             appendLine("</wpt>")
@@ -123,9 +123,8 @@ object FeatureExport {
         return "%02x%02x%02x%02x".format(a, b, g, r)
     }
 
-    private fun isoTime(millis: Long): String =
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
-            .format(Date(millis))
+    /** ISO 8601 in UTC, with milliseconds only when there are some, so times survive a round trip. */
+    private fun isoTime(millis: Long): String = Instant.ofEpochMilli(millis).toString()
 
     private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 }

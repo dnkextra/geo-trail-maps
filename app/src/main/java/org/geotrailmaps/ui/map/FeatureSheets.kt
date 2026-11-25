@@ -182,7 +182,7 @@ fun FeatureEditSheet(
     // A default name ("Placemark 3") is shown as the field's placeholder, so typing starts fresh.
     val defaultName = feature.name.takeIf(PointNames::isDefault)
     var name by remember(feature.id) { mutableStateOf(if (defaultName != null) "" else feature.name) }
-    var time by remember(feature.id) { mutableLongStateOf(feature.createdAt) }
+    var time by remember(feature.id) { mutableLongStateOf(feature.time ?: feature.createdAt) }
     var description by remember(feature.id) { mutableStateOf(feature.description) }
     var color by remember(feature.id) { mutableIntStateOf(feature.color) }
     var icon by remember(feature.id) { mutableStateOf(feature.icon) }
@@ -190,7 +190,8 @@ fun FeatureEditSheet(
     fun close() {
         // Untouched, the stored name stays as it is (not trimmed, so not counted as a rename).
         val newName = if (name == feature.name) feature.name else name.trim().ifBlank { feature.name }
-        val edited = feature.copy(name = newName, description = description, color = color, icon = icon, createdAt = time)
+        val edited = feature.copy(name = newName, description = description, color = color, icon = icon,
+            time = if (feature.type == FeatureType.POINT) time else feature.time)
         if (edited != feature) onSave(edited)
         if (feature.type == FeatureType.POINT && newName != feature.name) onNameUsed(newName)
         // Counted only when saved, so the recent row doesn't reorder under your finger.

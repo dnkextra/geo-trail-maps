@@ -286,7 +286,7 @@ private fun TrackRow(
     // A sum over every point: not redone each time the screen recomposes (every GPS fix while recording).
     val length = remember(f.points, f.track) { f.length }
     var menu by remember { mutableStateOf(false) }
-    val started = f.track?.times?.firstOrNull { it != null } ?: f.createdAt
+    val started = f.track?.times?.firstOrNull { it != null } ?: f.time ?: f.createdAt
     ListItem(
         modifier = Modifier.padding(start = 16.dp).then(if (onOpen != null) Modifier.clickable(onClickLabel = "Open map", onClick = onOpen) else Modifier),
         headlineContent = { Text(f.name) },
