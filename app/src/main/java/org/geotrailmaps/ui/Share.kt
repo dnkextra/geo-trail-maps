@@ -13,7 +13,6 @@ import kotlinx.coroutines.withContext
 import org.geotrailmaps.data.Feature
 import org.geotrailmaps.data.FeatureExport
 import org.geotrailmaps.data.FeatureLayer
-import org.geotrailmaps.data.MarkerType
 import java.io.File
 import java.io.IOException
 
@@ -27,14 +26,7 @@ class ExportResult(val export: ExportedFile, val savedAs: String?)
  * Writes [features] as KML or GPX and saves a copy in Downloads.
  * Null if the file couldn't be written at all; [ExportResult.savedAs] is null if only Downloads failed.
  */
-suspend fun exportFeatures(
-    context: Context,
-    name: String,
-    features: List<Feature>,
-    layers: List<FeatureLayer>,
-    kml: Boolean,
-    markerTypes: Map<String, MarkerType> = emptyMap(),
-): ExportResult? =
+suspend fun exportFeatures(context: Context, name: String, features: List<Feature>, layers: List<FeatureLayer>, kml: Boolean): ExportResult? =
     withContext(Dispatchers.IO) {
         // Two exports with one name share the cache file: one at a time, so neither copies the other's half-written file.
         exportLock.withLock {
@@ -43,7 +35,7 @@ suspend fun exportFeatures(
             // Pasted characters XML doesn't allow would make the file invalid.
             val title = name.filterNot { it.isISOControl() || it == '\uFFFE' || it == '\uFFFF' }
             try {
-                file.writeText(if (kml) FeatureExport.kml(title, features, layers, markerTypes) else FeatureExport.gpx(title, features, markerTypes))
+                file.writeText(if (kml) FeatureExport.kml(title, features, layers) else FeatureExport.gpx(title, features))
             } catch (e: Exception) {
                 file.delete()
                 return@withContext null

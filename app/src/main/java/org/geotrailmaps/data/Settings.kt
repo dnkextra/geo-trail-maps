@@ -77,52 +77,17 @@ class Settings(context: Context) {
         }
     }.getOrDefault(emptyList())
 
-    private val _markerSets = MutableStateFlow(loadMarkerSets())
-    /** Marker type files imported in Settings, in the order they were added. */
-    val markerSets: StateFlow<List<MarkerSet>> = _markerSets
+    private val _recentIcons = MutableStateFlow(
+        prefs.getString("recentIcons", null)?.let { s -> runCatching { JSONArray(s).let { a -> List(a.length()) { a.getString(it) } } }.getOrNull() }.orEmpty(),
+    )
+    /** Point icons in the order they were last used, most recent first. */
+    val recentIcons: StateFlow<List<String>> = _recentIcons
 
-    private val _markerTypes = MutableStateFlow(typesOf(_markerSets.value))
-    /** Every marker type by [MarkerType.id], in the order they're offered. */
-    val markerTypes: StateFlow<Map<String, MarkerType>> = _markerTypes
-
-    /**
-     * Reads [text] as a marker types file and adds it, replacing a set with the same id (so an
-     * edited file can be imported again). Returns the set and whether one was replaced.
-     * @throws MarkerTypesException if it can't be read.
-     */
-    fun importMarkerSet(text: String, fallbackName: String): Pair<MarkerSet, Boolean> {
-        val set = MarkerTypes.parse(text, fallbackName)
-        val list = _markerSets.value
-        val replaced = list.any { it.id == set.id }
-        setMarkerSets(if (replaced) list.map { if (it.id == set.id) set else it } else list + set)
-        return set to replaced
+    fun iconUsed(icon: String) {
+        val list = PointIcons.used(_recentIcons.value, icon)
+        prefs.edit { putString("recentIcons", JSONArray(list).toString()) }
+        _recentIcons.value = list
     }
-
-    /** Markers of its types keep their type, attributes and colour, and show as plain pins. */
-    fun deleteMarkerSet(id: String) = setMarkerSets(_markerSets.value.filter { it.id != id })
-
-    private fun setMarkerSets(list: List<MarkerSet>) {
-        // With its name, which may have come from the file name rather than the file.
-        val json = JSONArray(list.map { JSONObject().put("name", it.name).put("source", it.source) })
-        prefs.edit { putString("markerSets", json.toString()) }
-        _markerSets.value = list
-        _markerTypes.value = typesOf(list)
-    }
-
-    private fun typesOf(sets: List<MarkerSet>) = sets.flatMap { it.types }.associateByTo(LinkedHashMap()) { it.id }
-
-    /** Kept as the files' text and read again on start, so a newer app can read more of an old file. */
-    private fun loadMarkerSets(): List<MarkerSet> {
-        val json = runCatching { JSONArray(prefs.getString("markerSets", null) ?: return emptyList()) }.getOrNull() ?: return emptyList()
-        return List(json.length()) { json.optJSONObject(it) }.mapNotNull { o ->
-            runCatching { MarkerTypes.parse(o.getString("source"), o.optString("name", "Marker types")) }.getOrNull()
-        }
-    }
-
-    /** The type + places next ([MarkerType.id], or [MarkerTypes.PLAIN]), so a run of sightings is quick to log. */
-    var lastMarkerType: String
-        get() = prefs.getString("lastMarkerType", null) ?: MarkerTypes.PLAIN
-        set(value) = prefs.edit { putString("lastMarkerType", value) }
 
     /** Whether the "tap to show controls" hint has been shown once. */
     var fullscreenHintShown: Boolean

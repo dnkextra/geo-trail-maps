@@ -68,9 +68,6 @@ object MapStyle {
     val areaFillAlpha = 0.2f
     val pinRadius = 10.dp
     val pinHeight = 28.dp
-    /** Pins of a marker type: a larger head, to fit its icon. */
-    val iconPinRadius = 13.dp
-    val iconPinHeight = 34.dp
     val selectionHalo = Color(0xFFFFEB3B)
 
     /** Colours offered for placemarks, lines and areas (names are read by screen readers). */

@@ -42,20 +42,15 @@ import org.geotrailmaps.data.CoordinateParser
 import org.geotrailmaps.data.Feature
 import org.geotrailmaps.data.FeatureLayer
 import org.geotrailmaps.data.Formats
-import org.geotrailmaps.data.MarkerType
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.geo.Geodesy
 import org.geotrailmaps.geo.LatLon
 
-/** Features whose name, notes, marker type or details contain [query] (at least 2 characters). */
-fun searchMatches(query: String, features: List<Feature>, markerTypes: Map<String, MarkerType> = emptyMap()): List<Feature> {
+/** Features whose name or notes contain [query] (at least 2 characters). */
+fun searchMatches(query: String, features: List<Feature>): List<Feature> {
     val q = query.trim()
     if (q.length < 2) return emptyList()
-    return features.filter { f ->
-        f.name.contains(q, ignoreCase = true) || f.description.contains(q, ignoreCase = true) ||
-            f.markerType?.let { markerTypes[it]?.name }?.contains(q, ignoreCase = true) == true ||
-            f.attributes.values.any { it.contains(q, ignoreCase = true) }
-    }.take(50)
+    return features.filter { it.name.contains(q, ignoreCase = true) || it.description.contains(q, ignoreCase = true) }.take(50)
 }
 
 /**
@@ -97,7 +92,6 @@ fun SearchResults(
     query: String,
     features: List<Feature>,
     layers: List<FeatureLayer>,
-    markerTypes: Map<String, MarkerType>,
     myLocation: LatLon?,
     format: CoordinateFormat,
     units: Units,
@@ -108,7 +102,7 @@ fun SearchResults(
 ) {
     if (query.isBlank()) return
     val coordinate = remember(query) { CoordinateParser.parse(query) }
-    val matches = remember(query, features, markerTypes) { searchMatches(query, features, markerTypes) }
+    val matches = remember(query, features) { searchMatches(query, features) }
     val layerNames = layers.associate { it.id to it.name }
     val transparent = ListItemDefaults.colors(containerColor = Color.Transparent)
     Surface(

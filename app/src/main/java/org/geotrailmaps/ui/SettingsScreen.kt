@@ -149,8 +149,6 @@ fun SettingsScreen(settings: Settings, onBack: () -> Unit) {
                 leadingContent = { Icon(Icons.Filled.Add, null) },
                 modifier = Modifier.clickable { adding = true },
             )
-            SectionTitle("Marker types")
-            MarkerTypesSection(settings)
             SectionTitle("About")
             Text(
                 "Opens geospatial PDF maps (GeoPDFs), the format Avenza Maps imports and exports. Files in Avenza's own " +

@@ -29,10 +29,8 @@ data class Feature(
     val folder: String? = null,
     /** A line used for trail distance by itself (its layer can also make it one). */
     val trail: Boolean = false,
-    /** For points: a [MarkerType.id] ("wildlife/snake"), or null for a plain placemark. Kept if the type is deleted. */
-    val markerType: String? = null,
-    /** Values of its type's fields ([MarkerField.key] to value). */
-    val attributes: Map<String, String> = emptyMap(),
+    /** For points: an emoji drawn in the pin's head instead of its dot; null for none. */
+    val icon: String? = null,
 ) {
     /** The points split where a track was paused or continued from elsewhere; one list for anything else. */
     val segments: List<List<LatLon>>

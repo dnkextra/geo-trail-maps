@@ -8,32 +8,24 @@ import java.util.TimeZone
 /** Writes features as KML or GPX, the formats Avenza and most GIS tools exchange. */
 object FeatureExport {
 
-    /**
-     * Features drawn in the app go at the top level; each imported layer becomes a Folder.
-     * A marker's type and details are written as ExtendedData, named by [markerTypes] where known.
-     */
-    fun kml(
-        documentName: String,
-        features: List<Feature>,
-        layers: List<FeatureLayer> = emptyList(),
-        markerTypes: Map<String, MarkerType> = emptyMap(),
-    ): String = buildString {
+    /** Features drawn in the app go at the top level; each imported layer becomes a Folder. */
+    fun kml(documentName: String, features: List<Feature>, layers: List<FeatureLayer> = emptyList()): String = buildString {
         appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
         appendLine("""<kml xmlns="http://www.opengis.net/kml/2.2">""")
         appendLine("<Document>")
         appendLine("<name>${esc(documentName)}</name>")
         val known = layers.map { it.id }.toSet()
-        placemarks(features.filter { it.layerId == null || it.layerId !in known }, markerTypes)
+        placemarks(features.filter { it.layerId == null || it.layerId !in known })
         for (layer in layers) {
             appendLine("<Folder><name>${esc(layer.name)}</name>")
-            placemarks(features.filter { it.layerId == layer.id }, markerTypes)
+            placemarks(features.filter { it.layerId == layer.id })
             appendLine("</Folder>")
         }
         appendLine("</Document>")
         appendLine("</kml>")
     }
 
-    private fun StringBuilder.placemarks(features: List<Feature>, markerTypes: Map<String, MarkerType>) {
+    private fun StringBuilder.placemarks(features: List<Feature>) {
         for (f in features) {
             val color = kmlColor(f.color)
             appendLine("<Placemark>")
@@ -42,7 +34,8 @@ object FeatureExport {
             appendLine("<Style><IconStyle><color>$color</color></IconStyle>")
             appendLine("<LineStyle><color>$color</color><width>3</width></LineStyle>")
             appendLine("<PolyStyle><color>${"55" + color.substring(2)}</color></PolyStyle></Style>")
-            extendedData(f, f.markerType?.let(markerTypes::get))
+            // A point's emoji, read back on import (KML orders ExtendedData before the geometry).
+            if (f.type == FeatureType.POINT && f.icon != null) appendLine("<ExtendedData><Data name=\"icon\"><value>${esc(f.icon)}</value></Data></ExtendedData>")
             // Include elevations when known (KML's default altitude mode keeps them on the ground).
             fun coords(indices: IntRange) = indices.joinToString(" ") { i ->
                 val p = f.points[i]
@@ -71,26 +64,8 @@ object FeatureExport {
         }
     }
 
-    /** The marker type (its name, and id for reading back) and each detail, labelled as in the app. */
-    private fun StringBuilder.extendedData(f: Feature, type: MarkerType?) {
-        if (f.markerType == null && f.attributes.isEmpty()) return
-        appendLine("<ExtendedData>")
-        f.markerType?.let {
-            appendLine("<Data name=\"type\"><displayName>Type</displayName><value>${esc(type?.name ?: it.substringAfter('/'))}</value></Data>")
-            appendLine("<Data name=\"typeId\"><value>${esc(it)}</value></Data>")
-        }
-        for ((k, v) in f.attributes) {
-            val label = type?.fields?.firstOrNull { it.key == k }?.label ?: k
-            appendLine("<Data name=\"${esc(k)}\"><displayName>${esc(label)}</displayName><value>${esc(v)}</value></Data>")
-        }
-        appendLine("</ExtendedData>")
-    }
-
-    /**
-     * GPX has no polygons, so areas are written as closed tracks. A marker's type name goes in
-     * `<type>` and its details in `<cmt>` ("Species: Rattlesnake; How many: 2").
-     */
-    fun gpx(documentName: String, features: List<Feature>, markerTypes: Map<String, MarkerType> = emptyMap()): String = buildString {
+    /** GPX has no polygons, so areas are written as closed tracks. */
+    fun gpx(documentName: String, features: List<Feature>): String = buildString {
         appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
         appendLine("""<gpx version="1.1" creator="Geo Trail Maps" xmlns="http://www.topografix.com/GPX/1/1">""")
         appendLine("<metadata><name>${esc(documentName)}</name></metadata>")
@@ -99,13 +74,7 @@ object FeatureExport {
             appendLine("""<wpt lat="${p.lat}" lon="${p.lon}">""")
             appendLine("<time>${isoTime(f.createdAt)}</time>")
             appendLine("<name>${esc(f.name)}</name>")
-            val type = f.markerType?.let(markerTypes::get)
-            if (f.attributes.isNotEmpty()) {
-                val labels = type?.fields?.associate { it.key to it.label }.orEmpty()
-                appendLine("<cmt>${esc(f.attributes.entries.joinToString("; ") { (k, v) -> "${labels[k] ?: k}: $v" })}</cmt>")
-            }
             if (f.description.isNotBlank()) appendLine("<desc>${esc(f.description)}</desc>")
-            f.markerType?.let { appendLine("<type>${esc(type?.name ?: it.substringAfter('/'))}</type>") }
             appendLine("</wpt>")
         }
         for (f in features.filter { it.type != FeatureType.POINT }) {

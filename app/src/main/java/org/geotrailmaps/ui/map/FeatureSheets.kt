@@ -24,8 +24,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -107,8 +105,6 @@ import org.geotrailmaps.data.Feature
 import org.geotrailmaps.data.FeatureType
 import org.geotrailmaps.data.FeatureLayer
 import org.geotrailmaps.data.Formats
-import org.geotrailmaps.data.MarkerType
-import org.geotrailmaps.data.MarkerTypes
 import org.geotrailmaps.data.Trails
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.geo.Geodesy
@@ -131,6 +127,18 @@ fun Feature.summary(units: Units, format: CoordinateFormat): String = when (type
         (track?.durationMillis?.let { " · " + Formats.duration(it) } ?: "") +
         (track?.ascent?.takeIf { it >= 1 }?.let { " · ↑" + Formats.distance(it, units) } ?: "")
     FeatureType.AREA -> "Area ${Formats.area(area, units)} · Perimeter ${Formats.distance(length, units)}"
+}
+
+/** A point's emoji if it has one, else the symbol for its kind of feature in its colour. */
+@Composable
+fun FeatureIcon(type: FeatureType, icon: String?, color: Color, size: androidx.compose.ui.unit.Dp) {
+    if (type == FeatureType.POINT && icon != null) {
+        Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+            Text(icon, fontSize = with(androidx.compose.ui.platform.LocalDensity.current) { (size * 0.8f).toSp() }, maxLines = 1)
+        }
+    } else {
+        Icon(type.icon(), null, Modifier.size(size), tint = color)
+    }
 }
 
 /** Always decimal "lat, lon" so it pastes into other map apps. Android shows its own "Copied" confirmation. */
@@ -156,8 +164,9 @@ fun FeatureEditSheet(
     trailByLayer: Boolean,
     /** For lines: use it for trail distance by itself, or stop; null hides the switch. */
     onTrail: ((Boolean) -> Unit)?,
-    /** Marker types from Settings, offered for points. */
-    markerTypes: Map<String, MarkerType>,
+    /** For points: icons used lately, most recent first; [onIconUsed] when one is saved. */
+    recentIcons: List<String>,
+    onIconUsed: (String) -> Unit,
     onSave: (Feature) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -165,16 +174,13 @@ fun FeatureEditSheet(
     var name by remember(feature.id) { mutableStateOf(feature.name) }
     var description by remember(feature.id) { mutableStateOf(feature.description) }
     var color by remember(feature.id) { mutableIntStateOf(feature.color) }
-    var typeId by remember(feature.id) { mutableStateOf(feature.markerType) }
-    var values by remember(feature.id) { mutableStateOf(feature.attributes) }
-    val type = typeId?.let(markerTypes::get)
+    var icon by remember(feature.id) { mutableStateOf(feature.icon) }
 
     fun close() {
-        val edited = feature.copy(
-            name = name.ifBlank { feature.name }, description = description, color = color,
-            markerType = typeId, attributes = values.filterValues { it.isNotBlank() },
-        )
+        val edited = feature.copy(name = name.ifBlank { feature.name }, description = description, color = color, icon = icon)
         if (edited != feature) onSave(edited)
+        // Counted only when saved, so the recent row doesn't reorder under your finger.
+        icon?.takeIf { it != feature.icon }?.let(onIconUsed)
         onDismiss()
     }
 
@@ -182,7 +188,7 @@ fun FeatureEditSheet(
         // Scrolls so the buttons stay reachable with long notes or the keyboard open in landscape.
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (type != null) MarkerBadge(type) else Icon(feature.type.icon(), null, tint = Color(color))
+                FeatureIcon(feature.type, icon, Color(color), 24.dp)
                 Spacer(Modifier.size(8.dp))
                 Text(feature.summary(units, format), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                 if (feature.type == FeatureType.POINT) {
@@ -193,19 +199,9 @@ fun FeatureEditSheet(
             if (layerName != null) {
                 Text("In layer \"$layerName\"", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            // Offered once there are types to choose from (or this one has a type, now removed).
-            if (feature.type == FeatureType.POINT && (markerTypes.isNotEmpty() || typeId != null)) {
-                MarkerTypePicker(typeId, markerTypes) { to ->
-                    val (newName, newValues) = retype(name, type, values, to)
-                    name = newName
-                    values = newValues
-                    color = to?.color ?: MapStyle.placemarkColor.toArgb()
-                    typeId = to?.id
-                }
-            }
             OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            MarkerFieldsEditor(type?.fields.orEmpty(), values) { k, v -> values = values + (k to v) }
             OutlinedTextField(description, { description = it }, label = { Text("Notes") }, minLines = 2, modifier = Modifier.fillMaxWidth())
+            if (feature.type == FeatureType.POINT) IconRow(icon, recentIcons) { icon = it }
             Row(Modifier.fillMaxWidth()) {
                 for ((colorName, c) in MapStyle.featureColors) {
                     val argb = c.toArgb()
@@ -324,10 +320,6 @@ fun FeatureListSheet(
     format: CoordinateFormat,
     /** Expanded groups by layer id ("mine" for My features), kept by the caller across openings. */
     expanded: SnapshotStateMap<String, Boolean>,
-    markerTypes: Map<String, MarkerType>,
-    /** Point types shown on the map (see MapContent's markerFilter); null for all. */
-    markerFilter: Set<String>?,
-    onMarkerFilter: (Set<String>?) -> Unit,
     actions: FeatureListActions,
     onDismiss: () -> Unit,
 ) {
@@ -345,25 +337,21 @@ fun FeatureListSheet(
         val distance = if (f.type == FeatureType.POINT && myLocation != null) {
             Formats.distance(Geodesy.distance(myLocation, f.points.first()), units) + " away"
         } else null
-        val type = f.markerType?.let(markerTypes::get)
-        // "300 m away · Rattlesnake · 2": the distance first, so long details only cut off details.
-        val details = MarkerTypes.summary(f, type).ifEmpty { null }
         // Hidden features: the text dims, the controls stay at full strength.
         // Dimmed when the feature or its whole layer is hidden.
         val textAlpha = if (f.visible && layerVisible) 1f else 0.6f
         ListItem(
             headlineContent = {
                 Row(Modifier.alpha(textAlpha), verticalAlignment = Alignment.CenterVertically) {
-                    if (type != null) MarkerBadge(type, size = 18.dp) else Icon(f.type.icon(), null, Modifier.size(16.dp), tint = Color(f.color))
+                    FeatureIcon(f.type, f.icon, Color(f.color), 16.dp)
                     Spacer(Modifier.size(6.dp))
                     Text(f.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             },
             supportingContent = {
                 Text(
-                    listOfNotNull(distance, details).joinToString(" · ").ifEmpty { f.summary(units, format) },
-                    // Two lines for a marker's details, beside the row's three buttons.
-                    maxLines = if (details != null) 2 else 1,
+                    distance ?: f.summary(units, format),
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.alpha(textAlpha),
                 )
@@ -424,13 +412,6 @@ fun FeatureListSheet(
                     colors = transparent,
                     modifier = Modifier.clickable(onClickLabel = "Change", role = Role.Button) { choosingBasemap = true },
                 )
-            }
-            // Only when this map has typed markers: filtering plain placemarks alone isn't useful.
-            val kinds = features.filter { it.type == FeatureType.POINT }.map { it.markerType ?: MarkerTypes.PLAIN }.distinct()
-            if (kinds.any { it != MarkerTypes.PLAIN }) {
-                item(key = "markerFilter") {
-                    MarkerFilterRow(kinds, markerTypes, markerFilter, onMarkerFilter)
-                }
             }
             val mineOpen = expanded["mine"] != false
             item(key = "mine") {
@@ -718,33 +699,4 @@ private fun SmallIconButton(
         onClick = onClick,
         modifier = Modifier.size(40.dp).then(if (state != null) Modifier.semantics { stateDescription = state } else Modifier),
     ) { Icon(icon, description, Modifier.size(20.dp), tint = tint) }
-}
-
-/**
- * "Show markers": chips for each kind of point on this map. Tapping one while all are shown
- * shows only it; further taps add or remove kinds; removing the last shows all again.
- */
-@Composable
-private fun MarkerFilterRow(kinds: List<String>, types: Map<String, MarkerType>, filter: Set<String>?, onFilter: (Set<String>?) -> Unit) {
-    // Types in the order Settings offers them, then plain placemarks, then any whose type was removed.
-    val order = types.keys.toList()
-    val sorted = kinds.sortedBy { k -> order.indexOf(k).let { if (it >= 0) it else if (k == MarkerTypes.PLAIN) order.size else order.size + 1 } }
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Text("Show markers", style = MaterialTheme.typography.titleSmall)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = filter == null, onClick = { onFilter(null) }, label = { Text("All") })
-            for (k in sorted) {
-                val type = types[k]
-                FilterChip(
-                    selected = filter != null && k in filter,
-                    onClick = {
-                        val next = if (filter == null) setOf(k) else if (k in filter) filter - k else filter + k
-                        onFilter(next.ifEmpty { null })
-                    },
-                    label = { Text(type?.name ?: if (k == MarkerTypes.PLAIN) "Placemarks" else "${k.substringAfter('/')} (removed)") },
-                    leadingIcon = { MarkerBadge(type, size = 18.dp, plainColor = MapStyle.placemarkColor) },
-                )
-            }
-        }
-    }
 }
