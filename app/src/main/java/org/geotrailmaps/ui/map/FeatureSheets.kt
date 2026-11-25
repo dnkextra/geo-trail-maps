@@ -346,7 +346,7 @@ fun FeatureListSheet(
             Formats.distance(Geodesy.distance(myLocation, f.points.first()), units) + " away"
         } else null
         val type = f.markerType?.let(markerTypes::get)
-        // "Rattlesnake · 2 · 300 m away": what was seen comes first.
+        // "300 m away · Rattlesnake · 2": the distance first, so long details only cut off details.
         val details = MarkerTypes.summary(f, type).ifEmpty { null }
         // Hidden features: the text dims, the controls stay at full strength.
         // Dimmed when the feature or its whole layer is hidden.
@@ -361,8 +361,9 @@ fun FeatureListSheet(
             },
             supportingContent = {
                 Text(
-                    listOfNotNull(details, distance).joinToString(" · ").ifEmpty { f.summary(units, format) },
-                    maxLines = 1,
+                    listOfNotNull(distance, details).joinToString(" · ").ifEmpty { f.summary(units, format) },
+                    // Two lines for a marker's details, beside the row's three buttons.
+                    maxLines = if (details != null) 2 else 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.alpha(textAlpha),
                 )

@@ -14,7 +14,7 @@ This file is the plan. It also documents the file format. The first version desc
 ## How it works for the user
 
 1. **Settings → Marker types → Import marker types** and pick a `.json` file, or tap **Add the Wildlife example**. Settings lists each imported set with its icons, and each set can be deleted. Importing a file again with the same `id` replaces that set, so you can edit a file and import it again.
-2. **On a map, tap +.** When marker types exist, the *Point* mode shows a second row of chips: *Placemark* and then each type with its icon. The chosen type is remembered across maps and restarts. The button reads **Place Snake**.
+2. **On a map, tap +.** When marker types exist, *Point* mode shows a strip of chips floating over the map, just above the panel: *Placemark*, then each type with its icon. The strip is outside the panel because the panel keeps the same height in every mode, so the crosshair never moves. The chosen type is remembered across maps and restarts. The button reads **Place Snake**.
 3. **Placing it** names it after the type ("Snake 4"), gives it the type's colour, fills in default values, and opens the sheet.
 4. **The placemark sheet** has a **Type** menu above the name, so a long-press → *Add point* placemark can be given a type afterwards. The type's fields appear between *Name* and *Notes*:
    - *choice* fields as chips (tap the chosen one again to clear it)
@@ -25,8 +25,19 @@ This file is the plan. It also documents the file format. The first version desc
 5. **On the map**, typed markers are pins with a slightly larger head that holds the icon in white.
 6. **Filtering.** **Layers** has a **Show markers** row of chips (*All*, then each type used on this map, then *Placemarks*). Tapping a type shows only that type. Tapping more types adds them, and *All* resets. While a filter is on, a banner under the top bar says "Showing only Snake" and has a ✕ to clear it, so hidden markers aren't mistaken for lost ones. The filter affects points only; lines, areas and tracks stay. It lasts while the map is open.
 7. **Search** also matches type names and detail values ("rattle" finds rattlesnakes).
-8. **The Layers list** shows each marker's icon and its details ("Rattlesnake · 2 · Basking · 300 m away").
+8. **The Layers list** shows each marker's icon and its details ("300 m away · Rattlesnake · 2 · Basking").
 9. **Export:** KML writes the type and every detail as `<ExtendedData>`, which QGIS, Google Earth and others read as attribute columns. GPX writes the type name in `<type>` and the details in `<cmt>`.
+
+## Screens
+
+These are rendered from the app's real composables with [Paparazzi](https://github.com/cashapp/paparazzi). The map behind them is a stand-in, and the sheets are laid out the way `ModalBottomSheet` shows them. They aren't screenshots from a device.
+
+| | | |
+|---|---|---|
+| ![Adding a point](images/marker-types/1-add-point.png) | ![The placemark sheet](images/marker-types/2-editor.png) | ![Changing the type](images/marker-types/3-type-menu.png) |
+| **+**: pick a type, aim, place | The sheet: type and details | Changing a placemark's type |
+| ![Show markers in Layers](images/marker-types/4-layers-filter.png) | ![The map, filtered](images/marker-types/5-map-filtered.png) | ![Settings](images/marker-types/6-settings.png) |
+| Layers: *Show markers* and details | Filtered, with the banner | Settings → Marker types |
 
 ## File format
 

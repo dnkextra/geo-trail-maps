@@ -80,6 +80,7 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ElevatedFilterChip
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -1112,6 +1113,18 @@ private fun MapContent(
                     modifier = Modifier.weight(1f, fill = false).windowInsetsPadding(horizontalSafeArea).padding(horizontal = 8.dp, vertical = 6.dp),
                 )
             } else {
+            // Marker types float over the map above the panel, which keeps its fixed height.
+            if (adding == AddMode.POINT && geo != null && markerTypes.isNotEmpty()) {
+                MarkerTypeChips(
+                    types = markerTypes.values.toList(),
+                    selected = markerTypes[addType],
+                    onSelect = {
+                        addType = it?.id ?: MarkerTypes.PLAIN
+                        settings.lastMarkerType = addType
+                    },
+                    modifier = Modifier.windowInsetsPadding(horizontalSafeArea).padding(top = 6.dp),
+                )
+            }
             // Scale bar and locate button stay in both modes; with the bars hidden they sit
             // just above the navigation bar.
             val controlInsets = if (chromeHidden) barsAndCutout.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom) else horizontalSafeArea
@@ -1226,12 +1239,7 @@ private fun MapContent(
                             format = format,
                             units = units,
                             onModeChange = { adding = it },
-                            types = markerTypes.values.toList(),
                             type = markerTypes[addType],
-                            onTypeChange = {
-                                addType = it?.id ?: MarkerTypes.PLAIN
-                                settings.lastMarkerType = addType
-                            },
                             onUndo = { tapPoints.removeLastOrNull() },
                             onPlace = {
                                 val at = geo.toLatLon(viewport.center)
@@ -1713,10 +1721,8 @@ private fun AddPanel(
     format: CoordinateFormat,
     units: Units,
     onModeChange: (AddMode) -> Unit,
-    /** Marker types from Settings, offered for a point; [type] null is a plain placemark. */
-    types: List<MarkerType>,
+    /** The marker type a point gets (chosen in [MarkerTypeChips]); null for a plain placemark. */
     type: MarkerType?,
-    onTypeChange: (MarkerType?) -> Unit,
     onUndo: () -> Unit,
     onPlace: () -> Unit,
     onSave: () -> Unit,
@@ -1728,7 +1734,6 @@ private fun AddPanel(
             if (mode != AddMode.POINT) IconButton(onClick = onUndo, enabled = points.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Undo, "Remove last point") }
             IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Cancel adding") }
         }
-        if (mode == AddMode.POINT && types.isNotEmpty()) MarkerTypeChips(types, type, onTypeChange)
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (mode == AddMode.POINT) {
                 Column(Modifier.weight(1f)) {
@@ -1819,20 +1824,24 @@ private fun <T> ModeChips(modes: List<T>, selected: T, label: (T) -> String, onS
     }
 }
 
-/** The kind of point + places: a plain placemark or one of the marker types, each with its icon. */
+/**
+ * The kind of point + places: a plain placemark or one of the marker types, each with its icon.
+ * Elevated chips in a strip over the map, so they read on any map and one tap switches type.
+ */
 @Composable
-private fun MarkerTypeChips(types: List<MarkerType>, selected: MarkerType?, onSelect: (MarkerType?) -> Unit) {
-    // Scrolls to the remembered type, which may be far along a long list.
-    val scroll = rememberScrollState()
-    Row(Modifier.horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
+private fun MarkerTypeChips(types: List<MarkerType>, selected: MarkerType?, onSelect: (MarkerType?) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ElevatedFilterChip(
             selected = selected == null,
             onClick = { onSelect(null) },
             label = { Text("Placemark") },
             leadingIcon = { MarkerBadge(null, size = 18.dp, plainColor = MapStyle.placemarkColor) },
         )
         for (t in types) {
-            FilterChip(
+            ElevatedFilterChip(
                 selected = selected?.id == t.id,
                 onClick = { onSelect(t) },
                 label = { Text(t.name) },

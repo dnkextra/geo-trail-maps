@@ -111,7 +111,7 @@ fun MarkerTypesSection(settings: Settings) {
     }
     ListItem(
         headlineContent = { Text("Import marker types") },
-        supportingContent = { Text("A .json file of types (see the example below)") },
+        supportingContent = { Text("A .json file of types, with their icons and details") },
         leadingContent = { Icon(Icons.Filled.FileOpen, null) },
         // JSON files are often labelled as plain text or not at all, so anything can be picked.
         modifier = Modifier.clickable { launcher.launch(arrayOf("application/json", "text/*", "application/octet-stream")) },
