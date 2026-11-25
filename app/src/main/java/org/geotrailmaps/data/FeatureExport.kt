@@ -31,6 +31,8 @@ object FeatureExport {
             appendLine("<Placemark>")
             appendLine("<name>${esc(f.name)}</name>")
             if (f.description.isNotBlank()) appendLine("<description>${esc(f.description)}</description>")
+            // A point's time (set in its sheet); read back on import.
+            if (f.type == FeatureType.POINT) appendLine("<TimeStamp><when>${isoTime(f.createdAt)}</when></TimeStamp>")
             appendLine("<Style><IconStyle><color>$color</color></IconStyle>")
             appendLine("<LineStyle><color>$color</color><width>3</width></LineStyle>")
             appendLine("<PolyStyle><color>${"55" + color.substring(2)}</color></PolyStyle></Style>")

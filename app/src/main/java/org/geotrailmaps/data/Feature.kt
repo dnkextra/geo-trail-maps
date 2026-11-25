@@ -15,6 +15,7 @@ data class Feature(
     val points: List<LatLon>,
     /** ARGB colour. */
     val color: Int,
+    /** When it was added; for a point, the time shown (and changed) in its sheet, e.g. when something was seen. */
     val createdAt: Long = System.currentTimeMillis(),
     /** The layer this belongs to; null for features drawn in the app ("My features"). */
     val layerId: String? = null,

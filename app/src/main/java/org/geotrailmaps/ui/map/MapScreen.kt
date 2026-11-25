@@ -258,6 +258,7 @@ private fun MapContent(
     val openLocationSettings = { context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
     val format by settings.coordinateFormat.collectAsState()
     val recentIcons by settings.recentIcons.collectAsState()
+    val nameCounts by settings.nameCounts.collectAsState()
     val units by settings.units.collectAsState()
     // Each map keeps its own background; one opened before it had a choice gets the default from Settings.
     val defaultBasemap by settings.defaultBasemap.collectAsState()
@@ -586,7 +587,13 @@ private fun MapContent(
 
     fun addPlacemark(at: LatLon) {
         val n = session.features.count { it.type == FeatureType.POINT } + 1
-        val f = Feature(type = FeatureType.POINT, name = "Placemark $n", points = listOf(at), color = MapStyle.placemarkColor.toArgb())
+        // Placed where you are (within the fix's accuracy, or 10 m): note how good the fix was.
+        // Elsewhere it says nothing about the point, so the notes start empty.
+        val accuracy = location?.accuracy?.takeIf { it > 0 && !stale }
+        val notes = if (accuracy != null && myLatLon != null && Geodesy.distance(myLatLon, at) <= maxOf(accuracy.toDouble(), 10.0)) {
+            "GPS accuracy ±${Formats.distance(accuracy.toDouble(), units)}"
+        } else ""
+        val f = Feature(type = FeatureType.POINT, name = "Placemark $n", description = notes, points = listOf(at), color = MapStyle.placemarkColor.toArgb())
         session.upsert(f)
         openEditor(f.id)
     }
@@ -1319,6 +1326,8 @@ private fun MapContent(
             onTrail = if (f.type == FeatureType.LINE) ({ on -> session.setFeatureTrail(f.id, on) }) else null,
             recentIcons = recentIcons,
             onIconUsed = settings::iconUsed,
+            nameCounts = nameCounts,
+            onNameUsed = settings::nameUsed,
             onNavigate = {
                 val to = f.points.first()
                 scope.launch {
