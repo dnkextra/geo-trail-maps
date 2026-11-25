@@ -8,6 +8,7 @@ import androidx.compose.animation.core.animate
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.runtime.DisposableEffect
@@ -101,6 +102,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -162,6 +164,8 @@ import org.geotrailmaps.data.CoordinateParser
 import org.geotrailmaps.data.Formats
 import org.geotrailmaps.data.MapEntry
 import org.geotrailmaps.data.MapLibrary
+import org.geotrailmaps.data.MarkerType
+import org.geotrailmaps.data.MarkerTypes
 import org.geotrailmaps.data.Settings
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.ui.RouteNoticeDialog
@@ -340,6 +344,22 @@ private fun MapContent(
     }
     /** The + tool: a point aimed with the centre crosshair, or a line or area tapped out. */
     var adding by remember { mutableStateOf<AddMode?>(null) }
+    val markerTypes by settings.markerTypes.collectAsState()
+    /** The marker type + places (or [MarkerTypes.PLAIN]); remembered across maps and restarts. */
+    var addType by remember { mutableStateOf(settings.lastMarkerType) }
+    /**
+     * Point types shown on the map ([MarkerTypes.PLAIN] for plain placemarks); null shows all.
+     * Lines and areas aren't affected. Kept while the map is open.
+     */
+    var markerFilter by remember { mutableStateOf<Set<String>?>(null) }
+    /** What's drawn and can be tapped: [MapSession.shownFeatures] less points filtered out. */
+    val mapFeatures by remember {
+        derivedStateOf {
+            val filter = markerFilter
+            if (filter == null) session.shownFeatures
+            else session.shownFeatures.filter { it.type != FeatureType.POINT || (it.markerType ?: MarkerTypes.PLAIN) in filter }
+        }
+    }
     val placing = adding == AddMode.POINT
     /** Taps on the map add points: navigating, or drawing a line or area. */
     val tapping = navigating || adding == AddMode.LINE || adding == AddMode.AREA
@@ -583,10 +603,25 @@ private fun MapContent(
         }
     }
 
-    fun addPlacemark(at: LatLon) {
-        val n = session.features.count { it.type == FeatureType.POINT } + 1
-        val f = Feature(type = FeatureType.POINT, name = "Placemark $n", points = listOf(at), color = MapStyle.placemarkColor.toArgb())
+    /** A placemark at [at], of marker type [typeId] if it's known: named, coloured and filled in from the type. */
+    fun addPlacemark(at: LatLon, typeId: String = MarkerTypes.PLAIN) {
+        val type = markerTypes[typeId]
+        val f = if (type == null) {
+            val n = session.features.count { it.type == FeatureType.POINT } + 1
+            Feature(type = FeatureType.POINT, name = "Placemark $n", points = listOf(at), color = MapStyle.placemarkColor.toArgb())
+        } else {
+            Feature(
+                type = FeatureType.POINT,
+                name = MarkerTypes.defaultName(type.name, session.features),
+                points = listOf(at),
+                color = type.color,
+                markerType = type.id,
+                attributes = type.fields.filter { it.default.isNotEmpty() }.associate { it.key to it.default },
+            )
+        }
         session.upsert(f)
+        // A new type would otherwise be hidden by the filter as soon as it's placed.
+        markerFilter?.let { markerFilter = it + (f.markerType ?: MarkerTypes.PLAIN) }
         openEditor(f.id)
     }
 
@@ -909,7 +944,7 @@ private fun MapContent(
                     }
                 } else {
                     val pinHeight = with(density) { MapStyle.pinHeight.toPx() }
-                    val hit = hitTest(session.shownFeatures, pos, session.geometry!!, viewport, density.density, pinHeight)
+                    val hit = hitTest(mapFeatures, pos, session.geometry!!, viewport, density.density, pinHeight)
                     if (hit != null) {
                         openEditor(hit.id)
                     } else {
@@ -940,8 +975,8 @@ private fun MapContent(
         ) {
             if (proj != null) {
                 // While a saved track is being continued, the live line (which includes it) replaces it.
-                val shown = recording.continuingId?.let { id -> session.shownFeatures.filter { it.id != id } } ?: session.shownFeatures
-                drawFeatures(shown, selectedId, session.geometry!!, viewport)
+                val shown = recording.continuingId?.let { id -> mapFeatures.filter { it.id != id } } ?: mapFeatures
+                drawFeatures(shown, selectedId, session.geometry!!, viewport, markerTypes)
                 if (addingTrails) {
                     if (trailMode == TrailMode.PICK) mapLines?.let { drawPickableLines(it, usedLines, pickSelection.toSet(), viewport) }
                     drawTrails(session.trailFeatures, session.geometry, viewport)
@@ -980,6 +1015,12 @@ private fun MapContent(
                         units = units,
                         onStop = { navTarget = null },
                         locationOn = locationOn,
+                    )
+                }
+                markerFilter?.let { filter ->
+                    FilterBanner(
+                        names = filter.map { markerTypes[it]?.name ?: if (it == MarkerTypes.PLAIN) "Placemarks" else "Unknown type" }.sorted(),
+                        onClear = { markerFilter = null },
                     )
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -1052,6 +1093,7 @@ private fun MapContent(
                     query = searchQuery,
                     features = session.features,
                     layers = session.layers,
+                    markerTypes = markerTypes,
                     myLocation = myLatLon,
                     format = format,
                     units = units,
@@ -1160,7 +1202,7 @@ private fun MapContent(
                             query = searchQuery,
                             onQueryChange = { searchQuery = it },
                             onGo = {
-                                val matches = searchMatches(searchQuery, session.features)
+                                val matches = searchMatches(searchQuery, session.features, markerTypes)
                                 val coordinate = CoordinateParser.parse(searchQuery)
                                 when {
                                     coordinate != null -> goTo(coordinate)
@@ -1184,11 +1226,17 @@ private fun MapContent(
                             format = format,
                             units = units,
                             onModeChange = { adding = it },
+                            types = markerTypes.values.toList(),
+                            type = markerTypes[addType],
+                            onTypeChange = {
+                                addType = it?.id ?: MarkerTypes.PLAIN
+                                settings.lastMarkerType = addType
+                            },
                             onUndo = { tapPoints.removeLastOrNull() },
                             onPlace = {
                                 val at = geo.toLatLon(viewport.center)
                                 closeTools()
-                                addPlacemark(at)
+                                addPlacemark(at, addType)
                             },
                             onSave = { saveShape(mode == AddMode.AREA, tapPoints.toList()) },
                             onClose = ::closeTools,
@@ -1316,6 +1364,7 @@ private fun MapContent(
             ) ({ continueTrack(f) }) else null,
             trailByLayer = Trails.byLayer(f, session.layers.find { it.id == f.layerId }),
             onTrail = if (f.type == FeatureType.LINE) ({ on -> session.setFeatureTrail(f.id, on) }) else null,
+            markerTypes = markerTypes,
             onNavigate = {
                 val to = f.points.first()
                 scope.launch {
@@ -1355,6 +1404,9 @@ private fun MapContent(
             units = units,
             format = format,
             expanded = expandedGroups,
+            markerTypes = markerTypes,
+            markerFilter = markerFilter,
+            onMarkerFilter = { markerFilter = it },
             actions = FeatureListActions(
                 onImport = {
                     if (geo == null) showMessage("This PDF has no location information, so files can't be placed on it.")
@@ -1536,7 +1588,7 @@ private fun MapContent(
             exporting = false
             val layers = session.layers.toList()
             scope.launch {
-                val result = exportFeatures(context, name, chosen, layers.filter { l -> chosen.any { it.layerId == l.id } }, kml)
+                val result = exportFeatures(context, name, chosen, layers.filter { l -> chosen.any { it.layerId == l.id } }, kml, markerTypes)
                 when {
                     result == null -> showMessage("Couldn't export the features. Storage may be full.")
                     result.savedAs == null -> shareExport(context, result.export)
@@ -1661,6 +1713,10 @@ private fun AddPanel(
     format: CoordinateFormat,
     units: Units,
     onModeChange: (AddMode) -> Unit,
+    /** Marker types from Settings, offered for a point; [type] null is a plain placemark. */
+    types: List<MarkerType>,
+    type: MarkerType?,
+    onTypeChange: (MarkerType?) -> Unit,
     onUndo: () -> Unit,
     onPlace: () -> Unit,
     onSave: () -> Unit,
@@ -1672,6 +1728,7 @@ private fun AddPanel(
             if (mode != AddMode.POINT) IconButton(onClick = onUndo, enabled = points.isNotEmpty()) { Icon(Icons.AutoMirrored.Filled.Undo, "Remove last point") }
             IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Cancel adding") }
         }
+        if (mode == AddMode.POINT && types.isNotEmpty()) MarkerTypeChips(types, type, onTypeChange)
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (mode == AddMode.POINT) {
                 Column(Modifier.weight(1f)) {
@@ -1680,7 +1737,7 @@ private fun AddPanel(
                     Text(Formats.coordinate(target, format), style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = onPlace) { Text("Place marker") }
+                Button(onClick = onPlace) { Text(if (type == null) "Place marker" else "Place ${type.name}", maxLines = 1, overflow = TextOverflow.Ellipsis) }
             } else {
                 val area = mode == AddMode.AREA
                 val (result, isHint) = when {
@@ -1759,6 +1816,48 @@ private fun PressedPanel(
 private fun <T> ModeChips(modes: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit, modifier: Modifier = Modifier) {
     Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         for (m in modes) FilterChip(selected = selected == m, onClick = { onSelect(m) }, label = { Text(label(m)) })
+    }
+}
+
+/** The kind of point + places: a plain placemark or one of the marker types, each with its icon. */
+@Composable
+private fun MarkerTypeChips(types: List<MarkerType>, selected: MarkerType?, onSelect: (MarkerType?) -> Unit) {
+    // Scrolls to the remembered type, which may be far along a long list.
+    val scroll = rememberScrollState()
+    Row(Modifier.horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = selected == null,
+            onClick = { onSelect(null) },
+            label = { Text("Placemark") },
+            leadingIcon = { MarkerBadge(null, size = 18.dp, plainColor = MapStyle.placemarkColor) },
+        )
+        for (t in types) {
+            FilterChip(
+                selected = selected?.id == t.id,
+                onClick = { onSelect(t) },
+                label = { Text(t.name) },
+                leadingIcon = { MarkerBadge(t, size = 18.dp) },
+            )
+        }
+    }
+}
+
+/** On the map while points are filtered by type, so they aren't mistaken for missing. */
+@Composable
+private fun FilterBanner(names: List<String>, onClear: () -> Unit) {
+    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.secondaryContainer, shadowElevation = 2.dp) {
+        Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.FilterList, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                if (names.isEmpty()) "No markers shown" else "Showing only " + names.joinToString(", "),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            IconButton(onClick = onClear) { Icon(Icons.Filled.Close, "Show all markers") }
+        }
     }
 }
 

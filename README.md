@@ -15,6 +15,7 @@ Maps, GPS and tracks work with no connection. The optional background map (OpenS
 - **Go to a placemark**: from a placemark's editor, *Navigate* finds the way along trails when the map has them and you're on it. Otherwise it gives the distance and bearing, with an arrow and a line on the map.
 - **Search / go to**: type coordinates in any supported format, or part of a placemark's name or notes.
 - **Adding points, lines and areas**: tap *+*. *Point* places a marker with the crosshair, which starts at your position; *Line* and *Area* are drawn by tapping points, with their length or area shown as you go. Each has a name, notes and a colour, and you can copy a point's coordinates. They're listed under *Layers*.
+- **Marker types**: import your own kinds of point in *Settings → Marker types* (a JSON file; there's a Wildlife example to start from), such as snake sightings or bear sign. Each has an icon, a colour and details to fill in (species, how many…). *+* then offers them beside *Placemark*, pins show the icon, *Layers → Show markers* shows only the types you pick, search finds details, and exports include them. See [docs/marker-types.md](docs/marker-types.md) for the file format.
 - **Navigate**: tap points to measure the way between them, along trails (the default) or straight (*Distance*), and save it as a line.
 - **Trail distance**: *Navigate → Trails* measures the walk between the points along trails, taking the shortest way. The trails are the lines in the PDF's own layers named like trails, paths or roads, imported layers you turn on with the hiking button under *Layers* (choosing which KML folders count), single lines with *Use as trail* in their sheet, and trails you add. Lines are joined where they cross or end within 10 m of each other; parts with no trail are measured straight and shown dashed.
 - **Route limits**: the app doesn't account for real-world conditions or safety. Routes are based on map lines and may not be optimal or traversable. Trail maps may be inaccurate, so distance estimates may also be inaccurate. The app says so the first time you use Navigate, and under *Settings*.
@@ -79,6 +80,7 @@ app/src/main/java/org/geotrailmaps/
   render/BasemapTiles.kt    Background map sources, tile fetching and caching (memory + disk)
   data/                     map library storage, features + layers, settings, formatting
   data/FeatureImport.kt     GPX / KML / KMZ import;  data/FeatureExport.kt  KML / GPX export
+  data/MarkerTypes.kt       marker type files (types, fields, SVG-subset icons); ui/map/MarkerIcons.kt, MarkerFields.kt draw and edit them
   data/CoordinateParser.kt  typed coordinates (decimal, DMS, DDM, UTM)
   track/                    track recorder + foreground location service
   location/                 GPS + compass (platform LocationManager)

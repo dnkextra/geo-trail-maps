@@ -1,0 +1,163 @@
+{
+  "id": "wildlife",
+  "name": "Wildlife",
+  "fields": [
+    {
+      "key": "confidence",
+      "label": "Confidence",
+      "type": "choice",
+      "options": [
+        "Certain",
+        "Likely",
+        "Unsure"
+      ],
+      "default": "Certain"
+    }
+  ],
+  "types": [
+    {
+      "id": "snake",
+      "name": "Snake",
+      "color": "#5D7A2B",
+      "icon": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 20c3 1.5 7.5 1 7.5-2.2S4.5 14 6 10.8 13.5 9 15.5 6.5'/><circle cx='17.6' cy='5.2' r='2.4' fill='currentColor' stroke='none'/><path d='M19.6 4.2l2-1.4M19.9 5.4l2.1.3' stroke-width='1.2'/></svg>",
+      "fields": [
+        {
+          "key": "species",
+          "label": "Species",
+          "type": "choice",
+          "options": [
+            "Rattlesnake",
+            "Gopher snake",
+            "Garter snake",
+            "Rubber boa",
+            "Unknown"
+          ]
+        },
+        {
+          "key": "count",
+          "label": "How many",
+          "type": "number",
+          "default": "1"
+        },
+        {
+          "key": "behaviour",
+          "label": "Behaviour",
+          "type": "choice",
+          "options": [
+            "Basking",
+            "Moving",
+            "Coiled",
+            "Dead"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bear",
+      "name": "Bear sign",
+      "color": "#6D4C41",
+      "icon": "<svg viewBox='0 0 24 24'><path d='M12 12.5c-3.2 0-5.8 2.9-5.8 5.6 0 1.7 1.3 2.7 2.9 2.7 1.2 0 1.8-.7 2.9-.7s1.7.7 2.9.7c1.6 0 2.9-1 2.9-2.7 0-2.7-2.6-5.6-5.8-5.6z'/><ellipse cx='4.6' cy='10.6' rx='2' ry='2.6'/><ellipse cx='8.8' cy='6.2' rx='2.1' ry='2.8'/><ellipse cx='15.2' cy='6.2' rx='2.1' ry='2.8'/><ellipse cx='19.4' cy='10.6' rx='2' ry='2.6'/></svg>",
+      "fields": [
+        {
+          "key": "species",
+          "label": "Species",
+          "type": "choice",
+          "options": [
+            "Black bear",
+            "Grizzly bear",
+            "Unknown"
+          ]
+        },
+        {
+          "key": "evidence",
+          "label": "Evidence",
+          "type": "choice",
+          "options": [
+            "Seen",
+            "Tracks",
+            "Scat",
+            "Digging",
+            "Rub tree"
+          ],
+          "default": "Seen"
+        },
+        {
+          "key": "count",
+          "label": "How many",
+          "type": "number",
+          "default": "1"
+        }
+      ]
+    },
+    {
+      "id": "ungulate",
+      "name": "Deer / elk",
+      "color": "#8D6E63",
+      "icon": "<svg viewBox='0 0 24 24'><path d='M9.6 2.8C6.9 5 5.4 9.2 5.4 13.6c0 3.6 1.6 6.2 3.8 6.2 1.4 0 1.9-1.3 1.9-3.1V6.2c0-1.6-.5-2.7-1.5-3.4z'/><path d='M14.4 2.8c2.7 2.2 4.2 6.4 4.2 10.8 0 3.6-1.6 6.2-3.8 6.2-1.4 0-1.9-1.3-1.9-3.1V6.2c0-1.6.5-2.7 1.5-3.4z'/></svg>",
+      "fields": [
+        {
+          "key": "species",
+          "label": "Species",
+          "type": "choice",
+          "options": [
+            "Mule deer",
+            "White-tailed deer",
+            "Elk",
+            "Moose",
+            "Bighorn sheep",
+            "Mountain goat"
+          ]
+        },
+        {
+          "key": "count",
+          "label": "How many",
+          "type": "number",
+          "default": "1"
+        }
+      ]
+    },
+    {
+      "id": "bird",
+      "name": "Bird",
+      "color": "#1E88E5",
+      "icon": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='M2 9.5c3.5-3 7-2.5 10 3 3-5.5 6.5-6 10-3'/></svg>",
+      "fields": [
+        {
+          "key": "species",
+          "label": "Species",
+          "type": "text"
+        },
+        {
+          "key": "count",
+          "label": "How many",
+          "type": "number",
+          "default": "1"
+        }
+      ]
+    },
+    {
+      "id": "plant",
+      "name": "Plant",
+      "color": "#D81B60",
+      "icon": "<svg viewBox='0 0 24 24'><circle cx='12' cy='4.6' r='2.9'/><circle cx='16.6' cy='8' r='2.9'/><circle cx='14.9' cy='13.2' r='2.9'/><circle cx='9.1' cy='13.2' r='2.9'/><circle cx='7.4' cy='8' r='2.9'/><circle cx='12' cy='9.6' r='2.4'/><path d='M12 15.5V22M12 19.5c-1.5-1.8-3.6-2.2-5-1.8 1 1.7 3 2.4 5 1.8z' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round'/></svg>",
+      "fields": [
+        {
+          "key": "species",
+          "label": "Species",
+          "type": "text"
+        },
+        {
+          "key": "stage",
+          "label": "Stage",
+          "type": "choice",
+          "options": [
+            "Leaves",
+            "Budding",
+            "Flowering",
+            "Seeding"
+          ]
+        }
+      ]
+    }
+  ]
+}

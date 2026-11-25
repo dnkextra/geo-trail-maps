@@ -13,6 +13,8 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.luminance
 import org.geotrailmaps.data.Feature
 import org.geotrailmaps.data.FeatureType
+import org.geotrailmaps.data.MarkerIcon
+import org.geotrailmaps.data.MarkerType
 import org.geotrailmaps.geo.GeoReference
 import org.geotrailmaps.geo.Geodesy
 import org.geotrailmaps.geo.LatLon
@@ -63,7 +65,14 @@ private fun screenPath(shape: FeatureGeometry.Shape, viewport: MapViewport, boun
     return path
 }
 
-fun DrawScope.drawFeatures(features: List<Feature>, selectedId: String?, geometry: FeatureGeometry, viewport: MapViewport) {
+/** [markerTypes]: points with a known type are drawn with its icon. */
+fun DrawScope.drawFeatures(
+    features: List<Feature>,
+    selectedId: String?,
+    geometry: FeatureGeometry,
+    viewport: MapViewport,
+    markerTypes: Map<String, MarkerType> = emptyMap(),
+) {
     val bounds = viewport.visibleViewBounds()
     // Lines and areas first so pins stay on top.
     for (f in features) {
@@ -84,17 +93,17 @@ fun DrawScope.drawFeatures(features: List<Feature>, selectedId: String?, geometr
         val tip = Offset(xy[0] * viewport.scale + viewport.offset.x, xy[1] * viewport.scale + viewport.offset.y)
         if (tip.x < bounds.left - 100f || tip.x > bounds.right + 100f || tip.y < bounds.top - 100f || tip.y > bounds.bottom + 100f) continue
         // Pins stay upright when the map is rotated.
-        rotate(-viewport.rotation, tip) { drawPin(tip, Color(f.color), f.id == selectedId) }
+        rotate(-viewport.rotation, tip) { drawPin(tip, Color(f.color), f.id == selectedId, f.markerType?.let(markerTypes::get)?.icon) }
     }
 }
 
 /**
  * A teardrop pin: a round head narrowing to a point at [tip]. The point sets it apart from
- * the round location dot even at a glance.
+ * the round location dot even at a glance. With an [icon] the head is larger and holds it.
  */
-private fun DrawScope.drawPin(tip: Offset, color: Color, selected: Boolean) {
-    val r = MapStyle.pinRadius.toPx()
-    val head = tip - Offset(0f, MapStyle.pinHeight.toPx() - r)
+private fun DrawScope.drawPin(tip: Offset, color: Color, selected: Boolean, icon: MarkerIcon? = null) {
+    val r = (if (icon != null) MapStyle.iconPinRadius else MapStyle.pinRadius).toPx()
+    val head = tip - Offset(0f, (if (icon != null) MapStyle.iconPinHeight else MapStyle.pinHeight).toPx() - r)
     val path = teardrop(tip, head, r)
     if (selected) drawPath(path, MapStyle.selectionHalo, style = Stroke(r * 1.4f, join = StrokeJoin.Round))
     drawCircle(Color.Black.copy(alpha = 0.35f), 2f * density, tip)
@@ -102,7 +111,7 @@ private fun DrawScope.drawPin(tip: Offset, color: Color, selected: Boolean) {
     drawPath(path, Color.Black.copy(alpha = 0.3f), style = Stroke(5f * density, join = StrokeJoin.Round))
     drawPath(path, Color.White, style = Stroke(4f * density, join = StrokeJoin.Round))
     drawPath(path, color)
-    drawCircle(Color.White, r * 0.38f, head)
+    if (icon != null) drawMarkerIcon(icon, head, r * 1.3f, Color.White) else drawCircle(Color.White, r * 0.38f, head)
 }
 
 /** The outline of a circle of radius [r] around [head], with tangents meeting at [tip] below it. */
