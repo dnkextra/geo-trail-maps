@@ -438,6 +438,7 @@ class MapLibrary(private val context: Context) {
         .put("visible", f.visible)
         .put("folder", f.folder ?: JSONObject.NULL)
         .put("trail", f.trail)
+        .apply { f.icon?.let { put("icon", it) } }
         .put("points", JSONArray().apply { f.points.forEach { put(JSONArray(listOf(it.lat, it.lon))) } })
 
     private fun layerToJson(l: FeatureLayer) = JSONObject()
@@ -496,6 +497,7 @@ class MapLibrary(private val context: Context) {
             visible = o.optBoolean("visible", true),
             folder = o.optStringOrNull("folder"),
             trail = o.optBoolean("trail", false),
+            icon = o.optStringOrNull("icon"),
         )
     }
 }

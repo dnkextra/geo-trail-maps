@@ -77,6 +77,18 @@ class Settings(context: Context) {
         }
     }.getOrDefault(emptyList())
 
+    private val _recentIcons = MutableStateFlow(
+        prefs.getString("recentIcons", null)?.let { s -> runCatching { JSONArray(s).let { a -> List(a.length()) { a.getString(it) } } }.getOrNull() }.orEmpty(),
+    )
+    /** Point icons in the order they were last used, most recent first. */
+    val recentIcons: StateFlow<List<String>> = _recentIcons
+
+    fun iconUsed(icon: String) {
+        val list = PointIcons.used(_recentIcons.value, icon)
+        prefs.edit { putString("recentIcons", JSONArray(list).toString()) }
+        _recentIcons.value = list
+    }
+
     /** Whether the "tap to show controls" hint has been shown once. */
     var fullscreenHintShown: Boolean
         get() = prefs.getBoolean("fullscreenHintShown", false)

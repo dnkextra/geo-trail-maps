@@ -257,6 +257,7 @@ private fun MapContent(
     val locationOn by tracker.enabled.collectAsState()
     val openLocationSettings = { context.startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
     val format by settings.coordinateFormat.collectAsState()
+    val recentIcons by settings.recentIcons.collectAsState()
     val units by settings.units.collectAsState()
     // Each map keeps its own background; one opened before it had a choice gets the default from Settings.
     val defaultBasemap by settings.defaultBasemap.collectAsState()
@@ -1316,6 +1317,8 @@ private fun MapContent(
             ) ({ continueTrack(f) }) else null,
             trailByLayer = Trails.byLayer(f, session.layers.find { it.id == f.layerId }),
             onTrail = if (f.type == FeatureType.LINE) ({ on -> session.setFeatureTrail(f.id, on) }) else null,
+            recentIcons = recentIcons,
+            onIconUsed = settings::iconUsed,
             onNavigate = {
                 val to = f.points.first()
                 scope.launch {

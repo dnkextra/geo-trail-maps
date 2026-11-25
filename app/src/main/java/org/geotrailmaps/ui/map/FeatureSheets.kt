@@ -77,6 +77,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.SnapshotStateMap
@@ -89,6 +90,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
@@ -129,6 +131,19 @@ fun Feature.summary(units: Units, format: CoordinateFormat): String = when (type
     FeatureType.AREA -> "Area ${Formats.area(area, units)} · Perimeter ${Formats.distance(length, units)}"
 }
 
+/** A point's emoji if it has one, else the symbol for its kind of feature in its colour. */
+@Composable
+fun FeatureIcon(type: FeatureType, icon: String?, color: Color, size: androidx.compose.ui.unit.Dp) {
+    if (type == FeatureType.POINT && icon != null) {
+        // No semantics, like the vector icon, so lists read the same with or without one.
+        Box(Modifier.size(size).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
+            Text(icon, fontSize = with(androidx.compose.ui.platform.LocalDensity.current) { (size * 0.8f).toSp() }, maxLines = 1)
+        }
+    } else {
+        Icon(type.icon(), null, Modifier.size(size), tint = color)
+    }
+}
+
 /** Always decimal "lat, lon" so it pastes into other map apps. Android shows its own "Copied" confirmation. */
 fun copyCoordinates(context: Context, p: LatLon) {
     context.getSystemService(ClipboardManager::class.java)
@@ -152,6 +167,9 @@ fun FeatureEditSheet(
     trailByLayer: Boolean,
     /** For lines: use it for trail distance by itself, or stop; null hides the switch. */
     onTrail: ((Boolean) -> Unit)?,
+    /** For points: icons used lately, most recent first; [onIconUsed] when one is saved. */
+    recentIcons: List<String>,
+    onIconUsed: (String) -> Unit,
     onSave: (Feature) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -159,10 +177,13 @@ fun FeatureEditSheet(
     var name by remember(feature.id) { mutableStateOf(feature.name) }
     var description by remember(feature.id) { mutableStateOf(feature.description) }
     var color by remember(feature.id) { mutableIntStateOf(feature.color) }
+    var icon by remember(feature.id) { mutableStateOf(feature.icon) }
 
     fun close() {
-        val edited = feature.copy(name = name.ifBlank { feature.name }, description = description, color = color)
+        val edited = feature.copy(name = name.ifBlank { feature.name }, description = description, color = color, icon = icon)
         if (edited != feature) onSave(edited)
+        // Counted only when saved, so the recent row doesn't reorder under your finger.
+        icon?.takeIf { it != feature.icon }?.let(onIconUsed)
         onDismiss()
     }
 
@@ -170,7 +191,7 @@ fun FeatureEditSheet(
         // Scrolls so the buttons stay reachable with long notes or the keyboard open in landscape.
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(feature.type.icon(), null, tint = Color(color))
+                FeatureIcon(feature.type, icon, Color(color), 24.dp)
                 Spacer(Modifier.size(8.dp))
                 Text(feature.summary(units, format), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                 if (feature.type == FeatureType.POINT) {
@@ -183,6 +204,8 @@ fun FeatureEditSheet(
             }
             OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(description, { description = it }, label = { Text("Notes") }, minLines = 2, modifier = Modifier.fillMaxWidth())
+            // Keyed so a different point gets its own row state, like the fields above.
+            if (feature.type == FeatureType.POINT) key(feature.id) { IconRow(icon, recentIcons) { icon = it } }
             Row(Modifier.fillMaxWidth()) {
                 for ((colorName, c) in MapStyle.featureColors) {
                     val argb = c.toArgb()
@@ -324,7 +347,7 @@ fun FeatureListSheet(
         ListItem(
             headlineContent = {
                 Row(Modifier.alpha(textAlpha), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(f.type.icon(), null, Modifier.size(16.dp), tint = Color(f.color))
+                    FeatureIcon(f.type, f.icon, Color(f.color), 16.dp)
                     Spacer(Modifier.size(6.dp))
                     Text(f.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }

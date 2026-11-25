@@ -89,6 +89,11 @@ object FeatureImport {
         for ((pm, folder) in placemarks(root)) {
             val name = pm.childText("name") ?: "Placemark"
             val desc = pm.childText("description")?.let(::stripHtml).orEmpty()
+            // A point's icon, as this app exports it: one character, so other apps' "icon" data
+            // (such as an image URL) is ignored rather than turned into its first letter.
+            val icon = pm.children("ExtendedData").flatMap { it.children("Data") }
+                .firstOrNull { it.getAttribute("name") == "icon" }?.childText("value")
+                ?.let { v -> PointIcons.first(v)?.takeIf { it == v.trim() } }
             val geometries = ArrayList<Geometry>()
             pm.children().forEach { collectGeometry(it, geometries) }
             // Several lines in one placemark (a MultiGeometry) are one line with gaps, e.g. a track
@@ -109,6 +114,7 @@ object FeatureImport {
                     layerId = layerId,
                     track = g.track,
                     folder = folder,
+                    icon = if (g.type == FeatureType.POINT) icon else null,
                 )
             }
         }

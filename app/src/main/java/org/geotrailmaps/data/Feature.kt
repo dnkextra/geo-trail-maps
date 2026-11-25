@@ -29,6 +29,8 @@ data class Feature(
     val folder: String? = null,
     /** A line used for trail distance by itself (its layer can also make it one). */
     val trail: Boolean = false,
+    /** For points: an emoji drawn in the pin's head instead of its dot; null for none. */
+    val icon: String? = null,
 ) {
     /** The points split where a track was paused or continued from elsewhere; one list for anything else. */
     val segments: List<List<LatLon>>
