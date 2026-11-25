@@ -29,8 +29,8 @@ android {
         applicationId = "org.geotrailmaps"
         minSdk = 33
         targetSdk = 37
-        versionCode = 29
-        versionName = "0.9.12"
+        versionCode = 30
+        versionName = "0.9.13"
     }
 
     signingConfigs {
