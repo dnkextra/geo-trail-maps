@@ -89,6 +89,21 @@ class Settings(context: Context) {
         _recentIcons.value = list
     }
 
+    private val _nameCounts = MutableStateFlow(
+        prefs.getString("nameCounts", null)?.let { s ->
+            runCatching { JSONObject(s).let { o -> o.keys().asSequence().associateWith { o.getInt(it) } } }.getOrNull()
+        }.orEmpty(),
+    )
+    /** How often each name has been given to a point, on any map: see [PointNames]. */
+    val nameCounts: StateFlow<Map<String, Int>> = _nameCounts
+
+    fun nameUsed(name: String) {
+        val counts = PointNames.used(_nameCounts.value, name)
+        if (counts == _nameCounts.value) return
+        prefs.edit { putString("nameCounts", JSONObject(counts).toString()) }
+        _nameCounts.value = counts
+    }
+
     /** Whether the "tap to show controls" hint has been shown once. */
     var fullscreenHintShown: Boolean
         get() = prefs.getBoolean("fullscreenHintShown", false)

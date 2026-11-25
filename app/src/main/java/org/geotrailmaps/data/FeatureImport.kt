@@ -64,7 +64,10 @@ object FeatureImport {
         }
         for (wpt in root.children("wpt")) {
             val p = gpxPoint(wpt) ?: continue
-            out += Feature(type = FeatureType.POINT, name = wpt.childText("name") ?: "Waypoint", description = gpxDescription(wpt), points = listOf(p), color = color, layerId = layerId)
+            out += Feature(
+                type = FeatureType.POINT, name = wpt.childText("name") ?: "Waypoint", description = gpxDescription(wpt), points = listOf(p), color = color, layerId = layerId,
+                createdAt = wpt.childText("time")?.let(::parseTime) ?: System.currentTimeMillis(),
+            )
         }
         for ((i, trk) in root.children("trk").withIndex()) {
             // One <trk> is one track, even in several <trkseg>s (e.g. paused while moving).
@@ -94,6 +97,8 @@ object FeatureImport {
             val icon = pm.children("ExtendedData").flatMap { it.children("Data") }
                 .firstOrNull { it.getAttribute("name") == "icon" }?.childText("value")
                 ?.let { v -> PointIcons.first(v)?.takeIf { it == v.trim() } }
+            // A point's time, as this app exports it.
+            val time = pm.children("TimeStamp").firstOrNull()?.childText("when")?.let(::parseTime)
             val geometries = ArrayList<Geometry>()
             pm.children().forEach { collectGeometry(it, geometries) }
             // Several lines in one placemark (a MultiGeometry) are one line with gaps, e.g. a track
@@ -115,6 +120,7 @@ object FeatureImport {
                     track = g.track,
                     folder = folder,
                     icon = if (g.type == FeatureType.POINT) icon else null,
+                    createdAt = time?.takeIf { g.type == FeatureType.POINT } ?: System.currentTimeMillis(),
                 )
             }
         }

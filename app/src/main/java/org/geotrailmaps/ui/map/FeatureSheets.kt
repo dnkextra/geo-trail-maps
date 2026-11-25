@@ -79,6 +79,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.remember
@@ -107,6 +108,7 @@ import org.geotrailmaps.data.Feature
 import org.geotrailmaps.data.FeatureType
 import org.geotrailmaps.data.FeatureLayer
 import org.geotrailmaps.data.Formats
+import org.geotrailmaps.data.PointNames
 import org.geotrailmaps.data.Trails
 import org.geotrailmaps.data.Units
 import org.geotrailmaps.geo.Geodesy
@@ -170,18 +172,27 @@ fun FeatureEditSheet(
     /** For points: icons used lately, most recent first; [onIconUsed] when one is saved. */
     recentIcons: List<String>,
     onIconUsed: (String) -> Unit,
+    /** For points: how often each name has been given (for suggestions); [onNameUsed] when one is saved. */
+    nameCounts: Map<String, Int>,
+    onNameUsed: (String) -> Unit,
     onSave: (Feature) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var name by remember(feature.id) { mutableStateOf(feature.name) }
+    // A default name ("Placemark 3") is shown as the field's placeholder, so typing starts fresh.
+    val defaultName = feature.name.takeIf(PointNames::isDefault)
+    var name by remember(feature.id) { mutableStateOf(if (defaultName != null) "" else feature.name) }
+    var time by remember(feature.id) { mutableLongStateOf(feature.createdAt) }
     var description by remember(feature.id) { mutableStateOf(feature.description) }
     var color by remember(feature.id) { mutableIntStateOf(feature.color) }
     var icon by remember(feature.id) { mutableStateOf(feature.icon) }
 
     fun close() {
-        val edited = feature.copy(name = name.ifBlank { feature.name }, description = description, color = color, icon = icon)
+        // Untouched, the stored name stays as it is (not trimmed, so not counted as a rename).
+        val newName = if (name == feature.name) feature.name else name.trim().ifBlank { feature.name }
+        val edited = feature.copy(name = newName, description = description, color = color, icon = icon, createdAt = time)
         if (edited != feature) onSave(edited)
+        if (feature.type == FeatureType.POINT && newName != feature.name) onNameUsed(newName)
         // Counted only when saved, so the recent row doesn't reorder under your finger.
         icon?.takeIf { it != feature.icon }?.let(onIconUsed)
         onDismiss()
@@ -202,8 +213,9 @@ fun FeatureEditSheet(
             if (layerName != null) {
                 Text("In layer \"$layerName\"", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            NameField(name, defaultName, if (feature.type == FeatureType.POINT) nameCounts else emptyMap()) { name = it }
             OutlinedTextField(description, { description = it }, label = { Text("Notes") }, minLines = 2, modifier = Modifier.fillMaxWidth())
+            if (feature.type == FeatureType.POINT) TimeRow(time) { time = it }
             // Keyed so a different point gets its own row state, like the fields above.
             if (feature.type == FeatureType.POINT) key(feature.id) { IconRow(icon, recentIcons) { icon = it } }
             Row(Modifier.fillMaxWidth()) {
