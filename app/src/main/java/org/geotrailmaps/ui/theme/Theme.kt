@@ -64,7 +64,20 @@ object MapStyle {
     /** A faint tint along lines in the PDF that can be picked as trails. */
     val pickableHint = Color(0x4000B8D4)
 
+    /** Width of a selected line; others are drawn quiet (below). */
     val lineWidth = 4.dp
+
+    /** Quiet line width (dp) zoomed in, between, and zoomed out; see [quietLineZoomRange]. */
+    const val quietLineIn = 2f
+    const val quietLineMid = 2.75f
+    const val quietLineOut = 3.5f
+    /** Metres of ground per dp at which quiet lines are at their thinnest and their widest. */
+    val quietLineZoomRange = 3.0 to 30.0
+    /** Opacity of all quiet lines together, so the map shows through them. */
+    const val quietLineAlpha = 0.7f
+    /** Each side of a quiet line, in the opposite tone to the line. */
+    val quietEdge = 0.75.dp
+    const val quietEdgeAlpha = 0.45f
     val areaFillAlpha = 0.2f
     val pinRadius = 10.dp
     val pinHeight = 28.dp
