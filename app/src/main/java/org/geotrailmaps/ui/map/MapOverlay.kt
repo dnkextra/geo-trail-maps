@@ -99,9 +99,12 @@ fun DrawScope.drawShapes(features: List<Feature>, selectedId: String?, geometry:
         val width = lineWidthDp * density
         val edge = Stroke(width + MapStyle.quietEdge.toPx() * 2, cap = StrokeCap.Round, join = StrokeJoin.Round)
         val line = Stroke(width, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint().apply { alpha = MapStyle.quietLineAlpha })
-        // Every edge before any line, so one line's edge never cuts across another line.
+        drawContext.canvas.saveLayer(bounds, Paint().apply { alpha = MapStyle.quietLineAlpha })
+        // Every edge before any line, so one line's edge never cuts across another line. Edges
+        // are faded as their own layer, so where they overlap they don't build up either.
+        drawContext.canvas.saveLayer(bounds, Paint().apply { alpha = MapStyle.quietEdgeAlpha })
         for ((path, color) in quiet) drawPath(path, edgeFor(color), style = edge)
+        drawContext.canvas.restore()
         for ((path, color) in quiet) drawPath(path, color, style = line)
         drawContext.canvas.restore()
     }
@@ -290,7 +293,7 @@ fun DrawScope.drawCrosshair(c: Offset) {
 
 /** A faint edge in the opposite tone to [color], so a quiet line reads on any background. */
 private fun edgeFor(color: Color) =
-    (if (color.luminance() > 0.6f) Color.Black else Color.White).copy(alpha = MapStyle.quietEdgeAlpha)
+    if (color.luminance() > 0.6f) Color.Black else Color.White
 
 private fun casingFor(color: Color) =
     if (color.luminance() > 0.6f) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.8f)
