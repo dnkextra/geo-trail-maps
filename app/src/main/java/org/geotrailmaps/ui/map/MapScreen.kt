@@ -950,14 +950,16 @@ private fun MapContent(
             if (proj != null) {
                 // While a saved track is being continued, the live line (which includes it) replaces it.
                 val shown = recording.continuingId?.let { id -> session.shownFeatures.filter { it.id != id } } ?: session.shownFeatures
-                drawFeatures(shown, selectedId, session.geometry!!, viewport)
+                drawShapes(shown, selectedId, session.geometry!!, viewport)
                 if (addingTrails) {
                     if (trailMode == TrailMode.PICK) mapLines?.let { drawPickableLines(it, usedLines, pickSelection.toSet(), viewport) }
                     drawTrails(session.trailFeatures, session.geometry, viewport)
                     pendingTrails.forEach { drawTrailInProgress(it, proj) }
                     drawTrailInProgress(trailPoints, proj)
                 }
-                if (recording.points.size >= 2) drawFeatures(listOf(recordingFeature), null, session.geometry, viewport)
+                if (recording.points.size >= 2) drawShapes(listOf(recordingFeature), null, session.geometry, viewport)
+                // Placemarks over every line, including the live track, so they're never hidden.
+                drawPins(shown, selectedId, session.geometry, viewport)
                 // The last route until the new one is found (a few ms), rather than flashing straight lines.
                 if (tapping && !addingTrails) drawMeasurement(tapPoints, adding == AddMode.AREA, proj, if (alongTrails) measureRoute?.second else null)
                 searchPoint?.let { drawSearchMarker(it, proj) }
