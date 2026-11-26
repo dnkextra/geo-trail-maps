@@ -64,9 +64,9 @@ private fun screenPath(shape: FeatureGeometry.Shape, viewport: MapViewport, boun
     return path
 }
 
-fun DrawScope.drawFeatures(features: List<Feature>, selectedId: String?, geometry: FeatureGeometry, viewport: MapViewport) {
+/** Lines and areas of [features]; points are drawn separately by [drawPins], so they can go on top of everything. */
+fun DrawScope.drawShapes(features: List<Feature>, selectedId: String?, geometry: FeatureGeometry, viewport: MapViewport) {
     val bounds = viewport.visibleViewBounds()
-    // Lines and areas first so pins stay on top.
     for (f in features) {
         if (f.type == FeatureType.POINT) continue
         val color = Color(f.color)
@@ -79,6 +79,11 @@ fun DrawScope.drawFeatures(features: List<Feature>, selectedId: String?, geometr
         drawPath(path, casingFor(color), style = Stroke(MapStyle.lineWidth.toPx() * 1.8f, cap = StrokeCap.Round, join = StrokeJoin.Round))
         drawPath(path, color, style = Stroke(MapStyle.lineWidth.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
+}
+
+/** The points of [features] as pins. */
+fun DrawScope.drawPins(features: List<Feature>, selectedId: String?, geometry: FeatureGeometry, viewport: MapViewport) {
+    val bounds = viewport.visibleViewBounds()
     for (f in features) {
         if (f.type != FeatureType.POINT) continue
         val xy = geometry.shape(f).xy
