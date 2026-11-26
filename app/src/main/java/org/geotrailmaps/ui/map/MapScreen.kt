@@ -112,6 +112,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
@@ -950,14 +951,17 @@ private fun MapContent(
             if (proj != null) {
                 // While a saved track is being continued, the live line (which includes it) replaces it.
                 val shown = recording.continuingId?.let { id -> session.shownFeatures.filter { it.id != id } } ?: session.shownFeatures
-                drawShapes(shown, selectedId, session.geometry!!, viewport)
+                // The live track is drawn like any other line, so a long one doesn't hide the map.
+                val lines = if (recording.points.size >= 2) shown + recordingFeature else shown
+                val mid = viewport.toScreen(viewport.center)
+                val metersPerDp = Geodesy.distance(proj.toLatLon(mid), proj.toLatLon(mid + Offset(100f, 0f))) / 100 * this.density
+                drawShapes(lines, selectedId, session.geometry!!, viewport, quietLineWidthDp(metersPerDp))
                 if (addingTrails) {
                     if (trailMode == TrailMode.PICK) mapLines?.let { drawPickableLines(it, usedLines, pickSelection.toSet(), viewport) }
                     drawTrails(session.trailFeatures, session.geometry, viewport)
                     pendingTrails.forEach { drawTrailInProgress(it, proj) }
                     drawTrailInProgress(trailPoints, proj)
                 }
-                if (recording.points.size >= 2) drawShapes(listOf(recordingFeature), null, session.geometry, viewport)
                 // Placemarks over every line, including the live track, so they're never hidden.
                 drawPins(shown, selectedId, session.geometry, viewport)
                 // The last route until the new one is found (a few ms), rather than flashing straight lines.
