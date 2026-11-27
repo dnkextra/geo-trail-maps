@@ -668,7 +668,8 @@ fun FeatureListSheet(
             for (layer in layers) {
                 // Tracks newest first, so the one being recorded is at the top.
                 val items = byLayer[layer.id].orEmpty().let { list -> if (layer.kind == LayerKind.TRACKS) list.sortedByDescending { it.createdAt } else list }
-                val open = expanded[layer.id] == true
+                // Open by default while it holds the track being recorded, so that's easy to find.
+                val open = expanded[layer.id] ?: items.any { it.id == recordingId }
                 val lineFolders = Trails.folders(layer, items)
                 item(key = "layer-${layer.id}") {
                     ListItem(
