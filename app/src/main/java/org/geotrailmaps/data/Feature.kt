@@ -34,7 +34,12 @@ data class Feature(
     val icon: String? = null,
     /** For points: the time it marks (e.g. when something was seen), changeable like its name; starts as when it was added. Null for lines and areas. */
     val time: Long? = if (type == FeatureType.POINT) createdAt else null,
+    /** For lines and areas: how solid the line is drawn, 0..1; null for the default ([DEFAULT_OPACITY]). */
+    val opacity: Float? = null,
 ) {
+    /** [opacity], or the default. */
+    val lineOpacity: Float get() = opacity?.coerceIn(MIN_OPACITY, 1f) ?: DEFAULT_OPACITY
+
     /** The points split where a track was paused or continued from elsewhere; one list for anything else. */
     val segments: List<List<LatLon>>
         get() {
@@ -52,6 +57,13 @@ data class Feature(
         }
 
     val area: Double get() = if (type == FeatureType.AREA) Geodesy.area(points) else 0.0
+
+    companion object {
+        /** Lines are half see-through unless set otherwise, so the map under them stays readable. */
+        const val DEFAULT_OPACITY = 0.5f
+        /** Fainter than this, a line is hard to find again to make it more solid: hide it instead. */
+        const val MIN_OPACITY = 0.1f
+    }
 }
 
 /**

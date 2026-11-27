@@ -81,32 +81,36 @@ internal fun quietLineWidthDp(metersPerDp: Double): Float {
  * Lines and areas of [features]; points are drawn separately by [drawPins], so they can go on top of everything.
  *
  * Lines are kept quiet so the map under them stays readable: thin ([lineWidthDp]), with a faint
- * edge in the opposite tone to the line, and all faded together as one layer, so tracks that
- * overlap or double back stay one light tint instead of building up. Only [selectedId] is bold.
+ * edge in the opposite tone to the line, and faded to their [Feature.lineOpacity]. Lines with the
+ * same opacity are faded together as one layer, so tracks that overlap or double back stay one
+ * light tint instead of building up. Only [selectedId] is bold (and solid).
  */
 fun DrawScope.drawShapes(features: List<Feature>, selectedId: String?, geometry: FeatureGeometry, viewport: MapViewport, lineWidthDp: Float) {
     val bounds = viewport.visibleViewBounds()
-    val quiet = ArrayList<Pair<Path, Color>>()
+    // By opacity, in the order first met, so the draw order stays close to the features' order.
+    val quiet = LinkedHashMap<Float, ArrayList<Pair<Path, Color>>>()
     var selected: Pair<Path, Color>? = null
     for (f in features) {
         if (f.type == FeatureType.POINT) continue
         val color = Color(f.color)
         val path = screenPath(geometry.shape(f), viewport, bounds, close = f.type == FeatureType.AREA) ?: continue
         if (f.type == FeatureType.AREA) drawPath(path, color.copy(alpha = MapStyle.areaFillAlpha))
-        if (f.id == selectedId) selected = path to color else quiet += path to color
+        if (f.id == selectedId) selected = path to color else quiet.getOrPut(f.lineOpacity) { ArrayList() } += path to color
     }
     if (quiet.isNotEmpty()) {
         val width = lineWidthDp * density
         val edge = Stroke(width + MapStyle.quietEdge.toPx() * 2, cap = StrokeCap.Round, join = StrokeJoin.Round)
         val line = Stroke(width, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        drawContext.canvas.saveLayer(bounds, Paint().apply { alpha = MapStyle.quietLineAlpha })
-        // Every edge before any line, so one line's edge never cuts across another line. Edges
-        // are faded as their own layer, so where they overlap they don't build up either.
-        drawContext.canvas.saveLayer(bounds, Paint().apply { alpha = MapStyle.quietEdgeAlpha })
-        for ((path, color) in quiet) drawPath(path, edgeFor(color), style = edge)
-        drawContext.canvas.restore()
-        for ((path, color) in quiet) drawPath(path, color, style = line)
-        drawContext.canvas.restore()
+        for ((opacity, group) in quiet) {
+            drawContext.canvas.saveLayer(bounds, Paint().apply { alpha = opacity })
+            // Every edge before any line, so one line's edge never cuts across another line. Edges
+            // are faded as their own layer, so where they overlap they don't build up either.
+            drawContext.canvas.saveLayer(bounds, Paint().apply { alpha = MapStyle.quietEdgeAlpha })
+            for ((path, color) in group) drawPath(path, edgeFor(color), style = edge)
+            drawContext.canvas.restore()
+            for ((path, color) in group) drawPath(path, color, style = line)
+            drawContext.canvas.restore()
+        }
     }
     selected?.let { (path, color) ->
         drawPath(path, MapStyle.selectionHalo, style = Stroke(MapStyle.lineWidth.toPx() * 2.5f, cap = StrokeCap.Round, join = StrokeJoin.Round))

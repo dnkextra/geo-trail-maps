@@ -440,6 +440,7 @@ class MapLibrary(private val context: Context) {
         .put("trail", f.trail)
         .apply { f.icon?.let { put("icon", it) } }
         .apply { f.time?.let { put("time", it) } }
+        .apply { f.opacity?.let { put("opacity", it.toDouble()) } }
         .put("points", JSONArray().apply { f.points.forEach { put(JSONArray(listOf(it.lat, it.lon))) } })
 
     private fun layerToJson(l: FeatureLayer) = JSONObject()
@@ -503,6 +504,7 @@ class MapLibrary(private val context: Context) {
             icon = o.optStringOrNull("icon"),
             // Points saved before they had a time mark when they were added.
             time = if (o.has("time")) o.getLong("time") else if (type == FeatureType.POINT) createdAt else null,
+            opacity = if (o.has("opacity")) o.getDouble("opacity").toFloat() else null,
         )
     }
 }

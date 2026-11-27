@@ -261,6 +261,7 @@ private fun MapContent(
     val recentIcons by settings.recentIcons.collectAsState()
     val nameCounts by settings.nameCounts.collectAsState()
     val units by settings.units.collectAsState()
+    val showLiveTrack by settings.showLiveTrack.collectAsState()
     // Each map keeps its own background; one opened before it had a choice gets the default from Settings.
     val defaultBasemap by settings.defaultBasemap.collectAsState()
     LaunchedEffect(session) { if (session.basemapChoice == null) session.setBasemap(defaultBasemap) }
@@ -312,10 +313,12 @@ private fun MapContent(
             TrackRecorder.Status.PAUSED -> {}
         }
     }
-    val recordingFeature = remember(recording.points) {
+    // A track being continued keeps its own opacity while it grows.
+    val liveOpacity = recording.continuingId?.let { id -> session.features.find { it.id == id }?.opacity }
+    val recordingFeature = remember(recording.points, liveOpacity) {
         Feature(
             id = RECORDING_ID, type = FeatureType.LINE, name = "", points = recording.points, color = MapStyle.recordingTrack.toArgb(),
-            track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts),
+            track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts), opacity = liveOpacity,
         )
     }
 
@@ -949,10 +952,11 @@ private fun MapContent(
             seeThrough = if (basemapSource != null && proj != null) session.seeThrough else 0f,
         ) {
             if (proj != null) {
-                // While a saved track is being continued, the live line (which includes it) replaces it.
+                // While a saved track is being continued, the live line (which includes it) replaces it,
+                // hidden or not.
                 val shown = recording.continuingId?.let { id -> session.shownFeatures.filter { it.id != id } } ?: session.shownFeatures
                 // The live track is drawn like any other line, so a long one doesn't hide the map.
-                val lines = if (recording.points.size >= 2) shown + recordingFeature else shown
+                val lines = if (recording.points.size >= 2 && showLiveTrack) shown + recordingFeature else shown
                 val mid = viewport.toScreen(viewport.center)
                 val metersPerDp = Geodesy.distance(proj.toLatLon(mid), proj.toLatLon(mid + Offset(100f, 0f))) / 100 * this.density
                 drawShapes(lines, selectedId, session.geometry!!, viewport, quietLineWidthDp(metersPerDp))
@@ -1160,6 +1164,8 @@ private fun MapContent(
                                 else resumeGap(recording, location)?.let { resumingFar = it } ?: TrackRecorder.resume(context.applicationContext)
                             },
                             onStop = { if (!savingTrack) showStopTrack = true },
+                            trackShown = showLiveTrack,
+                            onTrackShown = settings::setShowLiveTrack,
                         )
                     }
                     // Every mode fits the same fixed height, so the panel never resizes.

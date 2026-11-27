@@ -18,10 +18,13 @@ import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
@@ -128,7 +131,15 @@ fun DrawScope.drawSearchMarker(p: LatLon, proj: MapProjection) {
 
 /** Compact row in the bottom panel while a track records or is paused. */
 @Composable
-fun RecordingBar(state: TrackRecorder.State, units: Units, onPauseResume: () -> Unit, onStop: () -> Unit) {
+fun RecordingBar(
+    state: TrackRecorder.State,
+    units: Units,
+    onPauseResume: () -> Unit,
+    onStop: () -> Unit,
+    /** Whether the track is drawn on the map; with [onTrackShown], a button to hide or show it. */
+    trackShown: Boolean = true,
+    onTrackShown: ((Boolean) -> Unit)? = null,
+) {
     val recording = state.status == TrackRecorder.Status.RECORDING
     // Ticks only this row, not the whole map screen.
     val now by produceState(System.currentTimeMillis(), recording) {
@@ -161,6 +172,15 @@ fun RecordingBar(state: TrackRecorder.State, units: Units, onPauseResume: () -> 
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (onTrackShown != null) {
+            IconButton(onClick = { onTrackShown(!trackShown) }) {
+                Icon(
+                    if (trackShown) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                    if (trackShown) "Hide track on map" else "Show track on map",
+                    tint = if (trackShown) LocalContentColor.current else MaterialTheme.colorScheme.outline,
+                )
+            }
         }
         IconButton(onClick = onPauseResume) {
             Icon(if (recording) Icons.Filled.Pause else Icons.Filled.PlayArrow, if (recording) "Pause recording" else "Resume recording")

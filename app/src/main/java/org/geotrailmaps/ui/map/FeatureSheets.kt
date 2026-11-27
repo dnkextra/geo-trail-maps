@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -78,6 +79,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -94,6 +96,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -186,12 +189,15 @@ fun FeatureEditSheet(
     var description by remember(feature.id) { mutableStateOf(feature.description) }
     var color by remember(feature.id) { mutableIntStateOf(feature.color) }
     var icon by remember(feature.id) { mutableStateOf(feature.icon) }
+    var opacity by remember(feature.id) { mutableFloatStateOf(feature.lineOpacity) }
 
     fun close() {
         // Untouched, the stored name stays as it is (not trimmed, so not counted as a rename).
         val newName = if (name == feature.name) feature.name else name.trim().ifBlank { feature.name }
         val edited = feature.copy(name = newName, description = description, color = color, icon = icon,
-            time = if (feature.type == FeatureType.POINT) time else feature.time)
+            time = if (feature.type == FeatureType.POINT) time else feature.time,
+            // Left unset while untouched, so it follows the default.
+            opacity = if (opacity == feature.lineOpacity) feature.opacity else opacity)
         if (edited != feature) onSave(edited)
         if (feature.type == FeatureType.POINT && newName != feature.name) onNameUsed(newName)
         // Counted only when saved, so the recent row doesn't reorder under your finger.
@@ -240,6 +246,28 @@ fun FeatureEditSheet(
                         if (selected) Icon(Icons.Filled.Check, null, tint = contentColorOn(c))
                     }
                 }
+            }
+            if (feature.type != FeatureType.POINT) {
+                val percent = "${(opacity * 100).roundToInt()}%"
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Opacity", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    // A stroke of the line as it will look, over the sheet.
+                    Box(Modifier.size(width = 32.dp, height = 4.dp).background(Color(color).copy(alpha = opacity), CircleShape))
+                    Spacer(Modifier.size(8.dp))
+                    Text(percent, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.widthIn(min = 40.dp), textAlign = TextAlign.End)
+                }
+                Slider(
+                    value = opacity,
+                    onValueChange = { opacity = (it * 10).roundToInt() / 10f },
+                    valueRange = Feature.MIN_OPACITY..1f,
+                    // 10% steps, without the tick dots they'd draw.
+                    steps = 8,
+                    colors = SliderDefaults.colors(activeTickColor = Color.Transparent, inactiveTickColor = Color.Transparent),
+                    modifier = Modifier.semantics {
+                        contentDescription = "Opacity"
+                        stateDescription = percent
+                    },
+                )
             }
             if (onTrail != null) {
                 val on = trailByLayer || feature.trail
