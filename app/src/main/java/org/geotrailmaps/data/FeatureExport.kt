@@ -23,7 +23,8 @@ object FeatureExport {
     }
 
     private fun StringBuilder.placemarks(features: List<Feature>) {
-        for (f in features) {
+        // A track that has only just started has no points yet: nothing to write.
+        for (f in features.filter { it.points.isNotEmpty() }) {
             val color = kmlColor(f.color)
             appendLine("<Placemark>")
             appendLine("<name>${esc(f.name)}</name>")
@@ -79,7 +80,7 @@ object FeatureExport {
             if (f.description.isNotBlank()) appendLine("<desc>${esc(f.description)}</desc>")
             appendLine("</wpt>")
         }
-        for (f in features.filter { it.type != FeatureType.POINT }) {
+        for (f in features.filter { it.type != FeatureType.POINT && it.points.isNotEmpty() }) {
             val pts = if (f.type == FeatureType.AREA) f.points + f.points.first() else f.points
             appendLine("<trk><name>${esc(f.name)}</name>")
             if (f.description.isNotBlank()) appendLine("<desc>${esc(f.description)}</desc>")

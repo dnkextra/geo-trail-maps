@@ -99,9 +99,22 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
         snapshotFlow { features }.collect { list -> g.retain(list.mapTo(HashSet(keep)) { it.id }) }
     }
 
-    /** The global layers and features that overlap this map. */
+    /**
+     * The track being recorded, while it shows on this map: its points so far stand in for the
+     * stored ones (written every so often), and it's listed here even before it reaches the map.
+     */
+    var liveTrack by mutableStateOf<LiveTrack?>(null)
+
+    private val globalOverlapping by derivedStateOf { global.features.filter { overlaps(it, coverage) } }
+
+    /** The global layers and features that overlap this map, and the track being recorded. */
     private val globalHere by derivedStateOf {
-        val shown = global.features.filter { overlaps(it, coverage) }
+        val live = liveTrack?.let { l -> global.features.find { it.id == l.id }?.copy(points = l.points, track = l.track) }
+        val shown = when {
+            live == null -> globalOverlapping
+            globalOverlapping.any { it.id == live.id } -> globalOverlapping.map { if (it.id == live.id) live else it }
+            else -> globalOverlapping + live
+        }
         val ids = shown.mapNotNull { it.layerId }.toSet()
         MapFeatures(global.layers.filter { it.id in ids }, shown)
     }
@@ -437,3 +450,6 @@ class MapSession(val entry: MapEntry, val library: MapLibrary) : Closeable {
         tiles.clear()
     }
 }
+
+/** The points so far of the track being recorded into the stored track [id]. */
+data class LiveTrack(val id: String, val points: List<org.geotrailmaps.geo.LatLon>, val track: org.geotrailmaps.data.TrackData)

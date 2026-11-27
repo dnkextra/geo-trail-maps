@@ -48,25 +48,45 @@ import org.geotrailmaps.data.Formats
 import org.geotrailmaps.data.MapEntry
 import org.geotrailmaps.data.MapLibrary
 import org.geotrailmaps.data.Units
-import org.geotrailmaps.data.coverage
-import org.geotrailmaps.data.overlaps
 import org.geotrailmaps.track.TrackRecorder
 import android.location.Location
 import org.geotrailmaps.ui.map.RecordingBar
 import org.geotrailmaps.ui.map.ResumeGapDialog
 import org.geotrailmaps.ui.map.resumeGap
 import org.geotrailmaps.ui.map.StopTrackDialog
+import org.geotrailmaps.ui.map.FeatureEditSheet
+import org.geotrailmaps.ui.map.TrackSheet
+import org.geotrailmaps.ui.map.trackMaps
+import org.geotrailmaps.data.TrackData
+import org.geotrailmaps.data.CoordinateFormat
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.draw.alpha
 import org.geotrailmaps.ui.map.countText
 import java.text.DateFormat
 import java.util.Date
 
 /**
  * The recording, and every global layer (recorded tracks, and layers shown on all maps), whether
- * or not a map shows them: the one place to find a track whose map was deleted.
+ * or not a map shows them: the one place to find a track whose map was deleted. Each track can be
+ * shown or hidden, renamed, downloaded or deleted from its row; tapping it opens the same sheet as
+ * on a map, with the maps it can be viewed on.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, location: Location?, onOpenMap: (String) -> Unit, onBack: () -> Unit) {
+fun TracksScreen(
+    library: MapLibrary,
+    maps: List<MapEntry>,
+    units: Units,
+    format: CoordinateFormat,
+    location: Location?,
+    /** Opens map (first) zoomed to track (second). */
+    onShowTrackOn: (String, String) -> Unit,
+    onBack: () -> Unit,
+) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -84,21 +104,53 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
         }
     }
     var saving by remember { mutableStateOf(false) }
+    var editingId by remember { mutableStateOf<String?>(null) }
     var renaming by remember { mutableStateOf<Feature?>(null) }
     var exportingTrack by remember { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
-    val coverages = remember(maps) { maps.mapNotNull { m -> m.coverage()?.let { m to it } } }
 
-    val byLayer = remember(global) { global.features.groupBy { it.layerId }.mapValues { (_, v) -> v.sortedByDescending { it.createdAt } } }
+    // The track being recorded with its points so far (the stored copy is brought up to date every so often).
+    val features = remember(global, recording.points, recording.trackId) {
+        global.features.map { f ->
+            if (f.id != recording.trackId) f
+            else f.copy(points = recording.points, track = TrackData(recording.times, recording.elevations, null, recording.ascent, recording.segmentStarts))
+        }
+    }
+    val byLayer = remember(features) { features.groupBy { it.layerId }.mapValues { (_, v) -> v.sortedByDescending { it.createdAt } } }
 
     fun show(text: String) = scope.launch {
         snackbar.currentSnackbarData?.dismiss()
         snackbar.showSnackbar(text)
     }
 
-    /** Opens a map the feature is on, preferring maps not archived; null if none is. */
-    fun mapFor(f: Feature): MapEntry? =
-        coverages.filter { (_, area) -> overlaps(f, area) }.map { it.first }.minByOrNull { it.archived }
+    fun setVisible(f: Feature, visible: Boolean) = library.updateGlobal { d -> d.withFeature(f.id) { it.copy(visible = visible) } }
+
+    fun pauseOrResume() {
+        if (recording.status == TrackRecorder.Status.RECORDING) {
+            scope.launch {
+                TrackRecorder.awaitPendingFixes()
+                TrackRecorder.pause(context.applicationContext)
+            }
+        } else if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            show("Recording a track needs precise location. Allow it in Android's settings for this app.")
+        } else {
+            resumeGap(recording, location)?.let { resumingFar = it } ?: TrackRecorder.resume(context.applicationContext)
+        }
+    }
+
+    fun stop(name: String?) {
+        if (saving) return
+        saving = true
+        scope.launch {
+            try {
+                TrackRecorder.awaitPendingFixes()
+                val saved = TrackRecorder.stop(context.applicationContext, name)
+                show(if (saved == null) "Nothing was recorded, so the track was removed." else "Stopped \"${saved.name}\".")
+            } finally {
+                saving = false
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -115,19 +167,9 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
                     RecordingBar(
                         state = recording,
                         units = units,
-                        onPauseResume = {
-                            if (recording.status == TrackRecorder.Status.RECORDING) {
-                                scope.launch {
-                                    TrackRecorder.awaitPendingFixes()
-                                    TrackRecorder.pause(context.applicationContext)
-                                }
-                            } else if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                                show("Recording a track needs precise location. Allow it in Android's settings for this app.")
-                            } else {
-                                resumeGap(recording, location)?.let { resumingFar = it } ?: TrackRecorder.resume(context.applicationContext)
-                            }
-                        },
+                        onPauseResume = ::pauseOrResume,
                         onStop = { if (!saving) showStop = true },
+                        onOpen = { editingId = recording.trackId },
                     )
                     HorizontalDivider()
                 }
@@ -146,18 +188,20 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
                 val inLayer = byLayer[layer.id].orEmpty()
                 item(key = "layer-${layer.id}") {
                     LayerHeader(layer, inLayer.size) {
-                                                deleting = "Delete \"${layer.name}\" and its ${countText(inLayer.size)} from every map? This can't be undone. Export anything you want to keep first." to {
+                        deleting = "Delete \"${layer.name}\" and its ${countText(inLayer.size)} from every map? This can't be undone. Export anything you want to keep first." to {
                             library.updateGlobal { it.removeLayer(layer.id) }
                         }
                     }
                 }
                 items(inLayer, key = { it.id }) { f ->
-                    val map = remember(f.points, coverages) { mapFor(f) }
+                    val count = remember(f.points, maps) { trackMaps(f, maps, null).size }
                     TrackRow(
                         f = f,
                         units = units,
-                        onMap = map?.name,
-                        onOpen = map?.let { m -> { onOpenMap(m.id) } },
+                        mapCount = count,
+                        recording = if (f.id == recording.trackId) recording.status == TrackRecorder.Status.RECORDING else null,
+                        onOpen = { editingId = f.id },
+                        onVisible = { setVisible(f, it) },
                         onRename = { renaming = f },
                         onExport = { exportingTrack = f.id },
                         onDelete = {
@@ -172,27 +216,63 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
         }
     }
 
-    fun save() {
-        if (saving) return
-        saving = true
-        scope.launch {
-            try {
-                TrackRecorder.awaitPendingFixes()
-                val saved = TrackRecorder.stop(context.applicationContext)
-                show(if (saved == null) "The track was too short to save." else "Saved \"${saved.name}\".")
-            } finally {
-                saving = false
-            }
-        }
+    features.find { it.id == editingId }?.let { f ->
+        val live = f.id == recording.trackId
+        val onMaps = remember(f.points, maps) { trackMaps(f, maps, null) }
+        FeatureEditSheet(
+            feature = f,
+            units = units,
+            format = format,
+            layerName = global.layers.find { it.id == f.layerId }?.name,
+            onNavigate = {},
+            // Continued from a map, where it can be seen.
+            onContinueTrack = null,
+            trailByLayer = false,
+            onTrail = null,
+            recentIcons = emptyList(),
+            onIconUsed = {},
+            nameCounts = emptyMap(),
+            onNameUsed = {},
+            // Only what the sheet changes: the points are the recorder's while it records.
+            onSave = { e ->
+                library.updateGlobal { d ->
+                    d.withFeature(f.id) { it.copy(name = e.name, description = e.description, color = e.color, opacity = e.opacity, visible = e.visible) }
+                }
+            },
+            onDelete = {
+                val removed = global.features.find { it.id == f.id } ?: f
+                library.updateGlobal { it.removeFeature(f.id) }
+                scope.launch {
+                    snackbar.currentSnackbarData?.dismiss()
+                    if (snackbar.showSnackbar("\"${f.name}\" deleted", "Undo") == SnackbarResult.ActionPerformed) {
+                        library.updateGlobal { it.upsert(removed) }
+                    }
+                }
+            },
+            onDismiss = { editingId = null },
+            track = TrackSheet(
+                distance = if (live) recording.distance else f.length,
+                elapsed = if (live) recording::elapsedMillis else ({ f.track?.resumeMillis }),
+                ascent = if (live) recording.ascent else f.track?.ascent,
+                startedAt = if (live) recording.startedAt else f.track?.times?.firstOrNull { it != null } ?: f.createdAt,
+                recording = if (live) recording.status == TrackRecorder.Status.RECORDING else null,
+                onPauseResume = ::pauseOrResume,
+                onStop = { if (!saving) showStop = true },
+                onVisible = { setVisible(f, it) },
+                onDownload = { exportingTrack = f.id },
+                maps = onMaps,
+                onOpenMap = { m -> onShowTrackOn(m.id, f.id) },
+            ),
+        )
     }
 
     resumingFar?.let { distance ->
         ResumeGapDialog(
             distance = distance,
             units = units,
-            saveLabel = "Save",
+            saveLabel = "Stop",
             onResume = { resumingFar = null; TrackRecorder.resume(context.applicationContext) },
-            onSave = { resumingFar = null; save() },
+            onSave = { resumingFar = null; stop(null) },
             onDismiss = { resumingFar = null },
         )
     }
@@ -201,14 +281,10 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
         StopTrackDialog(
             state = recording,
             units = units,
-            onSave = {
+            name = global.features.find { it.id == recording.trackId }?.name.orEmpty(),
+            onStop = { name ->
                 showStop = false
-                save()
-            },
-            onDiscard = {
-                showStop = false
-                TrackRecorder.discard(context.applicationContext)
-                show("Track discarded.")
+                stop(name)
             },
             onDismiss = { showStop = false },
         )
@@ -227,7 +303,7 @@ fun TracksScreen(library: MapLibrary, maps: List<MapEntry>, units: Units, locati
 
     // Looked up each time, so a track that changes while the dialog is open is exported as it is then.
     exportingTrack?.let { id ->
-        val track = global.features.firstOrNull { it.id == id }
+        val track = features.firstOrNull { it.id == id }
         val layer = global.layers.firstOrNull { it.id == track?.layerId }
         // Deleted meanwhile: nothing to show.
         if (track == null || layer == null) return@let
@@ -276,9 +352,12 @@ private fun LayerHeader(layer: FeatureLayer, count: Int, onDelete: () -> Unit) {
 private fun TrackRow(
     f: Feature,
     units: Units,
-    /** The name of a map it's on; null if it's on none. */
-    onMap: String?,
-    onOpen: (() -> Unit)?,
+    /** How many maps it crosses. */
+    mapCount: Int,
+    /** For the track being recorded: true while recording, false while paused; null otherwise. */
+    recording: Boolean?,
+    onOpen: () -> Unit,
+    onVisible: (Boolean) -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
@@ -287,14 +366,34 @@ private fun TrackRow(
     val length = remember(f.points, f.track) { f.length }
     var menu by remember { mutableStateOf(false) }
     val started = f.track?.times?.firstOrNull { it != null } ?: f.time ?: f.createdAt
+    // Hidden tracks: the text dims, the controls stay at full strength.
+    val textAlpha = if (f.visible) 1f else 0.6f
     ListItem(
-        modifier = Modifier.padding(start = 16.dp).then(if (onOpen != null) Modifier.clickable(onClickLabel = "Open map", onClick = onOpen) else Modifier),
-        headlineContent = { Text(f.name) },
+        modifier = Modifier.clickable(onClickLabel = "Open", onClick = onOpen).padding(start = 4.dp),
+        leadingContent = {
+            Checkbox(
+                checked = f.visible,
+                onCheckedChange = onVisible,
+                colors = Color(f.color).let { c -> CheckboxDefaults.colors(checkedColor = c, uncheckedColor = MaterialTheme.colorScheme.outline) },
+                modifier = Modifier.semantics { contentDescription = "Show ${f.name}" },
+            )
+        },
+        headlineContent = { Text(f.name, Modifier.alpha(textAlpha)) },
         supportingContent = {
-            Column {
-                Text(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(started)) + " · " + Formats.distance(length, units))
+            Column(Modifier.alpha(textAlpha)) {
                 Text(
-                    if (onMap != null) "On \"$onMap\"" else "Not on any map",
+                    listOfNotNull(
+                        when (recording) { true -> "Recording"; false -> "Paused"; null -> null },
+                        DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(started)),
+                        Formats.distance(length, units),
+                    ).joinToString(" · "),
+                )
+                Text(
+                    when (mapCount) {
+                        0 -> "Not on any map"
+                        1 -> "On 1 map"
+                        else -> "On $mapCount maps"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

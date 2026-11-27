@@ -150,6 +150,8 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
     }
 
     var openMapId by rememberSaveable { mutableStateOf<String?>(null) }
+    /** A feature to zoom to when [openMapId] opens (a track opened from its list of maps). */
+    var focusFeatureId by remember { mutableStateOf<String?>(null) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showTracks by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -239,6 +241,7 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
     val maps by app.library.maps.collectAsState()
     val location by app.tracker.location.collectAsState()
     val units by app.settings.units.collectAsState()
+    val format by app.settings.coordinateFormat.collectAsState()
     val mapSort by app.settings.mapSort.collectAsState()
     val openEntry = maps.find { it.id == openMapId }
 
@@ -248,8 +251,9 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
             library = app.library,
             maps = maps,
             units = units,
+            format = format,
             location = location,
-            onOpenMap = { showTracks = false; openMapId = it },
+            onShowTrackOn = { map, track -> showTracks = false; focusFeatureId = track; openMapId = map },
             onBack = { showTracks = false },
         )
         openEntry != null -> MapScreen(
@@ -263,6 +267,9 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
             hasLocationPermission = hasLocationPermission,
             onRequestLocationPermission = requestLocationPermission,
             onBack = { openMapId = null },
+            onShowTrackOn = { map, track -> focusFeatureId = track; openMapId = map },
+            focusFeatureId = focusFeatureId,
+            onFocused = { focusFeatureId = null },
         )
         else -> MapListScreen(
             maps = maps,

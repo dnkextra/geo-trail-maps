@@ -20,13 +20,10 @@ import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
@@ -35,6 +32,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.produceState
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
@@ -138,9 +139,6 @@ fun RecordingBar(
     units: Units,
     onPauseResume: () -> Unit,
     onStop: () -> Unit,
-    /** Whether the track is drawn on the map; with [onTrackShown], a button to hide or show it. */
-    trackShown: Boolean = true,
-    onTrackShown: ((Boolean) -> Unit)? = null,
     /** Opens the track's sheet when the bar's text is tapped; null for none. */
     onOpen: (() -> Unit)? = null,
 ) {
@@ -180,15 +178,6 @@ fun RecordingBar(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-        }
-        if (onTrackShown != null) {
-            IconButton(onClick = { onTrackShown(!trackShown) }) {
-                Icon(
-                    if (trackShown) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                    if (trackShown) "Hide track on map" else "Show track on map",
-                    tint = if (trackShown) LocalContentColor.current else MaterialTheme.colorScheme.outline,
-                )
-            }
         }
         IconButton(onClick = onPauseResume) {
             Icon(if (recording) Icons.Filled.Pause else Icons.Filled.PlayArrow, if (recording) "Pause recording" else "Resume recording")
@@ -234,28 +223,49 @@ fun ResumeGapDialog(distance: Double, units: Units, saveLabel: String, onResume:
 }
 
 @Composable
-fun StopTrackDialog(state: TrackRecorder.State, units: Units, onSave: () -> Unit, onDiscard: () -> Unit, onDismiss: () -> Unit) {
+fun StopTrackDialog(
+    state: TrackRecorder.State,
+    units: Units,
+    /** The track's name now; offered to change for a new track, which may still have its default name. */
+    name: String,
+    onStop: (name: String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var newName by remember { mutableStateOf(name) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Stop recording?") },
         text = {
-            Text(
-                if (state.points.size < 2) {
-                    "Too short to save yet. Keep recording, or discard it."
-                } else {
-                    "${Formats.distance(state.distance, units)} in ${Formats.duration(state.elapsedMillis())}. " +
-                        "Save it in Tracks, or discard it."
-                },
-            )
-        },
-        // Save stands alone; Discard sits with "Keep recording", away from it.
-        confirmButton = { if (state.points.size >= 2) Button(onClick = onSave) { Text("Save") } },
-        dismissButton = {
-            Row {
-                TextButton(onClick = onDiscard, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Discard") }
-                TextButton(onClick = onDismiss) { Text("Keep recording") }
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    when {
+                        state.points.size < 2 && state.isNew -> "No points recorded yet, so stopping removes this track."
+                        else -> "${Formats.distance(state.distance, units)} in ${Formats.duration(state.elapsedMillis())}. " +
+                            "It stays in Tracks, and you can carry on with it later."
+                    },
+                )
+                if (state.isNew && state.points.size >= 2) {
+                    OutlinedTextField(newName, { newName = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
             }
         },
+        confirmButton = { Button(onClick = { onStop(newName.takeIf { state.isNew && it.trim() != name }) }) { Text("Stop") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep recording") } },
+    )
+}
+
+/**
+ * Starting a new track, or continuing [continuing], while [current] is recording or paused:
+ * that one is stopped first (it's already saved).
+ */
+@Composable
+fun SwitchTrackDialog(current: String, continuing: String?, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (continuing == null) "Start a new track?" else "Continue \"$continuing\"?") },
+        text = { Text("\"$current\" is still being recorded. It will be stopped and kept in Tracks.") },
+        confirmButton = { Button(onClick = onConfirm) { Text(if (continuing == null) "Stop and start" else "Stop and continue") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 

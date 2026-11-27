@@ -27,7 +27,7 @@ import java.util.Locale
 import org.geotrailmaps.geo.Geodesy
 import org.geotrailmaps.geo.LatLon
 import java.io.File
-import java.util.Base64
+import java.util.UUID
 
 /**
  * Records a GPS track. Lives for the whole process so recording carries on while you switch
@@ -35,9 +35,10 @@ import java.util.Base64
  * and every pause/resume is appended to a file, so an unfinished track survives the app
  * being killed and comes back paused.
  *
- * Tracks belong to no map: [stop] saves them in the global "Recorded tracks" layer (or back
- * into the track continued), which every map they overlap shows. So recording works the
- * same from any map, the list, or the notification.
+ * Tracks belong to no map. A new track is added to the global "Recorded tracks" layer as soon as
+ * it starts (or records into the track continued), so it's listed, edited, hidden and deleted
+ * like any other track while it records. Its points are written into it every so often, on
+ * pause, and on [stop]. So recording works the same from any map, the list, or the notification.
  */
 object TrackRecorder {
     enum class Status { IDLE, RECORDING, PAUSED }
@@ -50,8 +51,10 @@ object TrackRecorder {
         val elevations: List<Double?> = emptyList(),
         /** Indices of points that begin a new segment, as [org.geotrailmaps.data.TrackData.segmentStarts]. */
         val segmentStarts: List<Int> = emptyList(),
-        /** Set when continuing a saved track (in a global layer): Stop updates that feature. */
-        val continuingId: String? = null,
+        /** The saved track this records into: added when it started, or the one continued. */
+        val trackId: String? = null,
+        /** Added by this recording (not continued), so Stop offers to name it, and drops it if it's empty. */
+        val isNew: Boolean = false,
         val distance: Double = 0.0,
         val ascent: Double = 0.0,
         val startedAt: Long = 0,
@@ -61,19 +64,6 @@ object TrackRecorder {
         val resumedAt: Long = 0,
         /** When it was paused, while paused. */
         val pausedAt: Long = 0,
-        /** What it's saved with: set when it starts (from the track continued), and changeable while it records. */
-        val name: String = "",
-        val notes: String = "",
-        val color: Int = MapStyle.recordingTrack.toArgb(),
-        /** As [Feature.opacity]: null for the default. */
-        val opacity: Float? = null,
-        /** Whether it's drawn on the map; it records either way. */
-        val visible: Boolean = true,
-        /**
-         * False only for a track recovered from a log written before tracks had these: then Stop
-         * keeps the continued track's own name and look.
-         */
-        val styled: Boolean = false,
     ) {
         fun elapsedMillis(now: Long = System.currentTimeMillis()) =
             pastMillis + if (status == Status.RECORDING) (now - resumedAt).coerceAtLeast(0) else 0
@@ -94,6 +84,15 @@ object TrackRecorder {
      * it's where the track left off, so travel while not recording isn't counted or drawn.
      */
     private var gap = false
+    /**
+     * Whether the track has been in the global layers since this recording started: once it
+     * has, its going means it was deleted, and the recording stops.
+     */
+    private var stored = false
+    /** Points in the stored track, and when it was last written. */
+    private var flushedPoints = 0
+    private var flushedAt = 0L
+    private var watching = false
 
     /**
      * Call once at startup; restores an unfinished track as paused. [library] is only needed
@@ -110,7 +109,11 @@ object TrackRecorder {
         if (text.isNotEmpty() && !text.endsWith("\n")) runCatching { f.appendText("\n") }
         runCatching { replay(text.lines()) }
         recovered = _state.value.status != Status.IDLE
-        if (recovered) PausedNotification.show(context.applicationContext)
+        if (recovered) {
+            PausedNotification.show(context.applicationContext)
+            // After startup, so the library isn't loaded before the first screen needs it.
+            cleanupScope.launch { watch(context.applicationContext) }
+        }
     }
 
     /**
@@ -131,8 +134,9 @@ object TrackRecorder {
     }
 
     /**
-     * Starts a new track, or continues [from] (a saved track in a global layer) where it ended.
-     * False (and nothing starts) while the previous track is still being saved.
+     * Starts a new track (added to Recorded tracks now), or continues [from] (a saved track in a
+     * global layer) where it ended. False (and nothing starts) while the previous track is still
+     * being saved.
      */
     fun start(context: Context, from: Feature? = null): Boolean {
         if (saving.value) return false
@@ -141,12 +145,9 @@ object TrackRecorder {
         generation++
         recordedOn.clear()
         gap = from != null
-        var s = State(
-            status = Status.RECORDING, startedAt = now, resumedAt = now, continuingId = from?.id,
-            name = from?.name ?: defaultName(now), notes = from?.description ?: "",
-            color = from?.color ?: MapStyle.recordingTrack.toArgb(), opacity = from?.opacity, styled = true,
-        )
-        val log = StringBuilder("START,$now,${from?.id ?: ""}\n${styleLine(s)}\n")
+        val id = from?.id ?: UUID.randomUUID().toString()
+        var s = State(status = Status.RECORDING, startedAt = now, resumedAt = now, trackId = id, isNew = from == null)
+        val log = StringBuilder("START,$now,$id,${if (from == null) "new" else ""}\n")
         if (from != null) {
             // Carry the saved track over, so distance and time continue from it.
             val past = from.track?.resumeMillis ?: 0L
@@ -166,34 +167,91 @@ object TrackRecorder {
                 log.append("P,${p.lat},${p.lon},${s.elevations[i] ?: ""},${s.times[i] ?: ""}\n") }
             log.append("RESUME,$now\n")
         }
+        val store = library.value
+        val g = store.global.value
+        if (from == null) {
+            val layer = tracksLayer(g)
+            store.updateGlobal(notify = false) { d ->
+                d.copy(
+                    layers = if (d.layers.any { it.id == layer.id }) d.layers else listOf(layer) + d.layers,
+                    features = d.features + Feature(
+                        id = id, type = FeatureType.LINE, name = defaultName(now), points = emptyList(), color = layer.color,
+                        createdAt = now, layerId = layer.id, track = TrackData(emptyList(), emptyList()),
+                    ),
+                )
+            }
+        }
+        // A track in a layer kept with one map isn't global until that layer moves (just after this).
+        stored = g.features.any { it.id == id } || from == null
+        flushedPoints = s.points.size
+        flushedAt = now
         _state.value = s
         file?.writeText(log.toString())
         PausedNotification.cancel(context)
         startService(context)
+        watch(context.applicationContext)
         return true
     }
 
-    /** Changes what the track being recorded is saved with, and whether it's drawn. */
-    fun edit(name: String, notes: String, color: Int, opacity: Float?, visible: Boolean) {
-        val s = _state.value
-        if (s.status == Status.IDLE) return
-        val edited = s.copy(name = name, notes = notes, color = color, opacity = opacity, visible = visible, styled = true)
-        if (edited == s) return
-        _state.value = edited
-        append(styleLine(edited))
-    }
-
-    fun setVisible(visible: Boolean) = _state.value.let { edit(it.name, it.notes, it.color, it.opacity, visible) }
-
-    // Name and notes in Base64, so commas and line breaks in them can't break the log's lines.
-    private fun styleLine(s: State) = listOf(
-        "STYLE", b64(s.name), b64(s.notes), s.color.toString(), s.opacity?.toString() ?: "", if (s.visible) "1" else "0",
-    ).joinToString(",")
-
-    private fun b64(text: String) = Base64.getEncoder().encodeToString(text.toByteArray())
-    private fun unb64(text: String) = String(Base64.getDecoder().decode(text))
+    private fun tracksLayer(g: org.geotrailmaps.data.MapFeatures) = g.layers.find { it.kind == LayerKind.TRACKS }
+        ?: FeatureLayer(name = "Recorded tracks", color = MapStyle.recordingTrack.toArgb(), kind = LayerKind.TRACKS)
 
     private fun defaultName(startedAt: Long) = "Track " + SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(startedAt))
+
+    private fun trackData(s: State) = TrackData(s.times, s.elevations, s.elapsedMillis(), s.ascent, s.segmentStarts)
+
+    /**
+     * Writes the points so far into the stored track. A track in a layer that hasn't moved to the
+     * global layers yet waits; one from a log older than this has its track added now. Main thread only.
+     */
+    private fun flush() {
+        val s = _state.value
+        if (s.status == Status.IDLE) return
+        val store = library.value
+        val g = store.global.value
+        val id = s.trackId
+        if (id == null || !stored && s.isNew && g.features.none { it.id == id }) {
+            // Recovered from an older log, which saved the track only at Stop: add it now.
+            val layer = tracksLayer(g)
+            val newId = id ?: UUID.randomUUID().toString()
+            store.updateGlobal(notify = false) { d ->
+                d.copy(
+                    layers = if (d.layers.any { it.id == layer.id }) d.layers else listOf(layer) + d.layers,
+                    features = d.features + Feature(
+                        id = newId, type = FeatureType.LINE, name = defaultName(s.startedAt), points = s.points, color = layer.color,
+                        createdAt = s.startedAt, layerId = layer.id, track = trackData(s),
+                    ),
+                )
+            }
+            if (id == null) append("LINK,$newId")
+            _state.value = s.copy(trackId = newId)
+            stored = true
+        } else if (g.features.any { it.id == id }) {
+            store.updateGlobal(notify = false) { d -> d.withFeature(id) { it.copy(points = s.points, track = trackData(s)) } }
+        } else {
+            return // not global yet, or deleted (then [watch] stops the recording)
+        }
+        flushedPoints = s.points.size
+        flushedAt = System.currentTimeMillis()
+    }
+
+    /**
+     * Follows the global layers for the rest of the process: the track being recorded is
+     * marked stored once it's there, and the recording ends (without saving) if it's deleted.
+     */
+    private fun watch(app: Context) {
+        if (watching) return
+        watching = true
+        cleanupScope.launch {
+            library.value.global.collect { g ->
+                val s = _state.value
+                val id = s.trackId ?: return@collect
+                if (s.status == Status.IDLE || saving.value) return@collect
+                if (g.features.any { it.id == id }) stored = true
+                else if (stored) discard(app)
+            }
+        }
+    }
 
     fun pause(context: Context) {
         val s = _state.value
@@ -203,6 +261,7 @@ object TrackRecorder {
         append("PAUSE,$now")
         stopService(context)
         PausedNotification.show(context)
+        flush()
     }
 
     fun resume(context: Context) {
@@ -234,44 +293,35 @@ object TrackRecorder {
     }
 
     /**
-     * Ends the recording and saves it: into the track it continued, if that still exists,
-     * else as a new track in the global "Recorded tracks" layer. Returns the saved track, or
-     * null if it was too short to save (and is discarded). Main thread only.
+     * Ends the recording and writes the last of it into its track, named [name] if given.
+     * Returns the track, or null if it had too few points to keep: then a new track is removed
+     * (a continued one stays as it was). If the track has gone from the global layers (a layer
+     * that never became global), it's saved as a new track in Recorded tracks. Main thread only.
      */
-    fun stop(context: Context): Feature? {
+    fun stop(context: Context, name: String? = null): Feature? {
         // Already stopped (e.g. a second tap): don't touch the log of the save in progress.
         if (_state.value.status == Status.IDLE) return null
         val track = finish(context)
+        val store = library.value
+        val g = store.global.value
+        val existing = track.trackId?.let { id -> g.features.find { it.id == id } }
         if (track.points.size < 2) {
+            if (track.isNew && existing != null) store.updateGlobal { it.removeFeature(existing.id) }
             clearLog()
             return null
         }
-        val data = TrackData(track.times, track.elevations, track.elapsedMillis(), track.ascent, track.segmentStarts)
-        val store = library.value
-        val g = store.global.value
-        val continued = g.features.find { it.id == track.continuingId }
-        val layer = g.layers.find { it.kind == LayerKind.TRACKS }
-            ?: FeatureLayer(name = "Recorded tracks", color = MapStyle.recordingTrack.toArgb(), kind = LayerKind.TRACKS)
-        val saved = when {
-            continued == null -> Feature(
-                type = FeatureType.LINE,
-                name = track.name.ifBlank { defaultName(track.startedAt) },
-                description = track.notes,
-                points = track.points,
-                color = if (track.styled) track.color else layer.color,
-                layerId = layer.id,
-                track = data,
-                opacity = track.opacity,
-                visible = track.visible,
-            )
-            track.styled -> continued.copy(
-                points = track.points, track = data, name = track.name.ifBlank { continued.name }, description = track.notes,
-                color = track.color, opacity = track.opacity, visible = track.visible,
-            )
-            else -> continued.copy(points = track.points, track = data, visible = true)
-        }
+        val layer = tracksLayer(g)
+        val saved = (existing?.copy(points = track.points, track = trackData(track)) ?: Feature(
+            type = FeatureType.LINE,
+            name = defaultName(track.startedAt),
+            points = track.points,
+            color = layer.color,
+            createdAt = track.startedAt,
+            layerId = layer.id,
+            track = trackData(track),
+        )).let { f -> name?.trim()?.takeIf { it.isNotEmpty() }?.let { f.copy(name = it) } ?: f }
         val job = store.updateGlobal(notify = false) { d ->
-            if (continued != null) d.withFeature(saved.id) { saved }
+            if (existing != null) d.withFeature(saved.id) { saved }
             else d.copy(layers = if (d.layers.any { it.id == layer.id }) d.layers else listOf(layer) + d.layers, features = d.features + saved)
         }
         clearLogAfter(job, context, track, saved.id)
@@ -305,7 +355,8 @@ object TrackRecorder {
             val ok = try { saved.await() } finally { saving.value = false }
             if (gen != generation || _state.value.status != Status.IDLE) return@launch
             if (ok) return@launch clearLog()
-            _state.value = track.copy(status = Status.PAUSED, continuingId = featureId, pausedAt = System.currentTimeMillis())
+            _state.value = track.copy(status = Status.PAUSED, trackId = featureId, pausedAt = System.currentTimeMillis())
+            stored = true
             gap = true
             // The log is kept for recovery; point it at the feature too.
             append("LINK,$featureId")
@@ -351,6 +402,7 @@ object TrackRecorder {
         )
         if (newSegment) append("SEG")
         append("P,${p.lat},${p.lon},${alt ?: ""},${location.time}")
+        if (_state.value.points.size - flushedPoints >= FLUSH_POINTS || System.currentTimeMillis() - flushedAt >= FLUSH_MS) flush()
     }
 
     /** Ascent with a 3 m dead band, so altitude noise doesn't add up. */
@@ -384,8 +436,10 @@ object TrackRecorder {
                     points.clear(); times.clear(); elevations.clear(); segmentStarts.clear()
                     s = State(
                         status = Status.RECORDING, startedAt = it, resumedAt = it,
-                        continuingId = v.getOrNull(2)?.ifEmpty { null }, name = defaultName(it),
+                        trackId = v.getOrNull(2)?.ifEmpty { null }, isNew = v.getOrNull(3) == "new" || v.getOrNull(2).isNullOrEmpty(),
                     )
+                    // Logs since tracks were added at Start: it was written then.
+                    stored = s.trackId != null
                 }
                 "BASE" -> {
                     s = s.copy(pastMillis = v[1].toLong(), ascent = v[2].toDouble(), startedAt = v[3].toLong())
@@ -398,11 +452,7 @@ object TrackRecorder {
                     altitudeRef = null
                 }
                 "SEG" -> newSegment = true
-                "LINK" -> s = s.copy(continuingId = v[1].ifEmpty { null })
-                "STYLE" -> s = s.copy(
-                    name = unb64(v[1]), notes = unb64(v[2]), color = v[3].toInt(),
-                    opacity = v[4].toFloatOrNull(), visible = v[5] != "0", styled = true,
-                )
+                "LINK" -> s = s.copy(trackId = v[1].ifEmpty { null }).also { stored = true }
                 "P" -> {
                     val p = LatLon(v[1].toDouble(), v[2].toDouble())
                     val alt = v[3].toDoubleOrNull()
@@ -447,4 +497,7 @@ object TrackRecorder {
     }
 
     private const val MIN_SPACING_M = 5.0
+    /** The stored track is brought up to date after this many new points, or this long. */
+    private const val FLUSH_POINTS = 50
+    private const val FLUSH_MS = 60_000L
 }

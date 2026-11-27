@@ -74,7 +74,7 @@ internal object PausedNotification {
     fun cancel(context: Context) = context.getSystemService(NotificationManager::class.java).cancel(ID)
 }
 
-/** Pause and Stop from the notification. Stop saves the track, as in the app. */
+/** Pause and Stop from the notification. Stop ends the recording, as in the app. */
 class RecordingActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext
@@ -90,9 +90,9 @@ class RecordingActionReceiver : BroadcastReceiver() {
                         // The app may be closed: keep the process alive until it's written. A failed
                         // save comes back paused, and the recorder says so.
                         TrackRecorder.awaitSaved()
-                        if (saved == null) Toast.makeText(app, "The track was too short to save.", Toast.LENGTH_LONG).show()
+                        if (saved == null) Toast.makeText(app, "Nothing was recorded, so the track was removed.", Toast.LENGTH_LONG).show()
                         else if (TrackRecorder.state.value.status == TrackRecorder.Status.IDLE) {
-                            Toast.makeText(app, "Saved \"${saved.name}\" in Tracks.", Toast.LENGTH_LONG).show()
+                            Toast.makeText(app, "Stopped \"${saved.name}\". It's in Tracks.", Toast.LENGTH_LONG).show()
                         }
                     }
                 }

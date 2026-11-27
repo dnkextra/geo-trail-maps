@@ -189,9 +189,16 @@ class TrackSheet(
     val onVisible: (Boolean) -> Unit,
     /** Save it as a file; null hides the button. */
     val onDownload: (() -> Unit)? = null,
-    /** Zoom to it, or open a map it's on; null hides the button. */
-    val onShowOnMap: (() -> Unit)? = null,
+    /** The maps it crosses, to view it on. */
+    val maps: List<TrackMap> = emptyList(),
+    /** Opens it on one of [maps] (zoomed to it). */
+    val onOpenMap: (TrackMap) -> Unit = {},
+    /** Shown on but its layer is hidden on the map this was opened from: it isn't drawn there. */
+    val layerHiddenHere: Boolean = false,
 )
+
+/** A map a track crosses. [here]: the map the sheet was opened from. */
+data class TrackMap(val id: String, val name: String, val here: Boolean = false, val archived: Boolean = false)
 
 /** Distance, time and ascent, and the day it started; the time ticks while it records. */
 @Composable
@@ -227,6 +234,39 @@ private fun TrackStatsHeader(track: TrackSheet, units: Units, modifier: Modifier
                 // Announced when it changes between recording and paused.
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
+        }
+    }
+}
+
+/** The maps a track crosses; tapping one shows the track there. */
+@Composable
+private fun TrackMapsList(maps: List<TrackMap>, onOpen: (TrackMap) -> Unit) {
+    Column {
+        Text("View on", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (maps.isEmpty()) {
+            Text(
+                "Not on any of your maps yet.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+        }
+        for (m in maps) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClickLabel = "Show the track on ${m.name}") { onOpen(m) },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Map, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.size(12.dp))
+                Text(m.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                val label = when {
+                    m.here -> "This map"
+                    m.archived -> "Archived"
+                    else -> null
+                }
+                if (label != null) Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.padding(start = 4.dp))
+            }
         }
     }
 }
@@ -312,15 +352,8 @@ fun FeatureEditSheet(
                     }
                 }
             }
-            if (track != null && (track.onShowOnMap != null || track.onDownload != null || onContinueTrack != null)) {
+            if (track != null && (track.onDownload != null || onContinueTrack != null)) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    track.onShowOnMap?.let { show ->
-                        OutlinedButton(onClick = { close(); show() }) {
-                            Icon(Icons.Filled.CenterFocusStrong, null, Modifier.size(18.dp))
-                            Spacer(Modifier.size(6.dp))
-                            Text("Show on map")
-                        }
-                    }
                     track.onDownload?.let { download ->
                         OutlinedButton(onClick = { close(); download() }) {
                             Icon(Icons.Filled.Download, null, Modifier.size(18.dp))
@@ -400,17 +433,19 @@ fun FeatureEditSheet(
                     )
                     Spacer(Modifier.size(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("Shown on the map")
-                        if (track.recording != null) {
-                            Text(
-                                "It keeps recording while it's hidden.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        Text("Shown on maps")
+                        val note = when {
+                            feature.visible && track.layerHiddenHere -> "Its layer is hidden on this map, so it isn't drawn here."
+                            track.recording != null && !feature.visible -> "It keeps recording while it's hidden."
+                            else -> null
+                        }
+                        if (note != null) {
+                            Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                     Switch(checked = feature.visible, onCheckedChange = null)
                 }
+                TrackMapsList(track.maps) { close(); track.onOpenMap(it) }
             }
             if (onTrail != null) {
                 val on = trailByLayer || feature.trail
@@ -443,8 +478,7 @@ fun FeatureEditSheet(
                 }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                // The track being recorded is discarded with Stop instead.
-                if (track?.recording == null) TextButton(
+                TextButton(
                     onClick = { onDelete(); onDismiss() },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) {
@@ -487,8 +521,6 @@ class FeatureListActions(
     val onSeeThrough: (Float) -> Unit,
     val onSeeThroughDone: () -> Unit,
     val onFeatureVisible: (Feature, Boolean) -> Unit,
-    /** Stop the track being recorded (it asks whether to save it). */
-    val onStopLive: () -> Unit = {},
 )
 
 /**
@@ -513,8 +545,9 @@ fun FeatureListSheet(
     expanded: SnapshotStateMap<String, Boolean>,
     actions: FeatureListActions,
     onDismiss: () -> Unit,
-    /** The track being recorded, shown first (null when none is); true while recording, false while paused. */
-    live: Pair<Feature, Boolean>? = null,
+    /** The track being recorded (labelled so in its layer), and whether it's recording (else paused). */
+    recordingId: String? = null,
+    recordingNow: Boolean = false,
 ) {
     var renaming by remember { mutableStateOf<FeatureLayer?>(null) }
     var choosingTrails by remember { mutableStateOf<FeatureLayer?>(null) }
@@ -526,7 +559,8 @@ fun FeatureListSheet(
     val transparent = ListItemDefaults.colors(containerColor = Color.Transparent)
 
     @Composable
-    fun FeatureRow(f: Feature, layerVisible: Boolean = true, recording: Boolean? = null) {
+    fun FeatureRow(f: Feature, layerVisible: Boolean = true) {
+        val recording = if (f.id == recordingId) recordingNow else null
         val distance = when {
             recording != null -> (if (recording) "Recording · " else "Paused · ") + Formats.distance(f.length, units)
             f.type == FeatureType.POINT && myLocation != null -> Formats.distance(Geodesy.distance(myLocation, f.points.first()), units) + " away"
@@ -570,8 +604,7 @@ fun FeatureListSheet(
                 Row {
                     SmallIconButton(Icons.Filled.CenterFocusStrong, "Show ${f.name} on map") { actions.onShow(f) }
                     SmallIconButton(Icons.Filled.Edit, "Edit ${f.name}") { actions.onEdit(f) }
-                    if (recording != null) SmallIconButton(Icons.Filled.Stop, "Stop recording") { actions.onStopLive() }
-                    else SmallIconButton(Icons.Filled.Delete, "Delete ${f.name}") { deleting = "Delete \"${f.name}\"?" to { actions.onDelete(f) } }
+                    SmallIconButton(Icons.Filled.Delete, "Delete ${f.name}") { deleting = "Delete \"${f.name}\"?" to { actions.onDelete(f) } }
                 }
             },
             modifier = Modifier
@@ -609,9 +642,6 @@ fun FeatureListSheet(
                     modifier = Modifier.clickable(onClickLabel = "Change", role = Role.Button) { choosingBasemap = true },
                 )
             }
-            live?.let { (f, recording) ->
-                item(key = "live") { FeatureRow(f, recording = recording) }
-            }
             val mineOpen = expanded["mine"] != false
             item(key = "mine") {
                 ListItem(
@@ -636,7 +666,8 @@ fun FeatureListSheet(
             }
             if (mineOpen) items(mine, key = { it.id }) { FeatureRow(it) }
             for (layer in layers) {
-                val items = byLayer[layer.id].orEmpty()
+                // Tracks newest first, so the one being recorded is at the top.
+                val items = byLayer[layer.id].orEmpty().let { list -> if (layer.kind == LayerKind.TRACKS) list.sortedByDescending { it.createdAt } else list }
                 val open = expanded[layer.id] == true
                 val lineFolders = Trails.folders(layer, items)
                 item(key = "layer-${layer.id}") {
