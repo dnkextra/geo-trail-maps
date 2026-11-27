@@ -1,6 +1,8 @@
 package org.geotrailmaps.ui.map
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -139,6 +141,8 @@ fun RecordingBar(
     /** Whether the track is drawn on the map; with [onTrackShown], a button to hide or show it. */
     trackShown: Boolean = true,
     onTrackShown: ((Boolean) -> Unit)? = null,
+    /** Opens the track's sheet when the bar's text is tapped; null for none. */
+    onOpen: (() -> Unit)? = null,
 ) {
     val recording = state.status == TrackRecorder.Status.RECORDING
     // Ticks only this row, not the whole map screen.
@@ -157,7 +161,11 @@ fun RecordingBar(
             Icons.Filled.FiberManualRecord, null, Modifier.size(14.dp),
             tint = if (recording) MapStyle.recordingTrack else MaterialTheme.colorScheme.outline,
         )
-        Column(Modifier.weight(1f)) {
+        Column(
+            Modifier.weight(1f).heightIn(min = 48.dp)
+                .then(if (onOpen != null) Modifier.clickable(onClickLabel = "Open track", onClick = onOpen) else Modifier),
+            verticalArrangement = Arrangement.Center,
+        ) {
             // Announced when it changes between recording and paused.
             Text(
                 if (recording) "Recording" else "Paused",

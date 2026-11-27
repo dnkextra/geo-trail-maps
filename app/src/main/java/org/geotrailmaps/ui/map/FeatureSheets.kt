@@ -1,5 +1,21 @@
 package org.geotrailmaps.ui.map
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.delay
+import java.text.DateFormat
+import java.util.Date
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -155,8 +171,68 @@ fun copyCoordinates(context: Context, p: LatLon) {
         .setPrimaryClip(ClipData.newPlainText("Coordinates", String.format(Locale.US, "%.6f, %.6f", p.lat, p.lon)))
 }
 
+/**
+ * What the feature sheet adds for a track: a saved one (recorded or imported), or the one being
+ * recorded, so every track is looked at and changed in the same place.
+ */
+class TrackSheet(
+    val distance: Double,
+    /** Moving time at `now` (ticks while [recording]); null if unknown. */
+    val elapsed: (now: Long) -> Long?,
+    val ascent: Double?,
+    val startedAt: Long?,
+    /** For the track being recorded: true while recording, false while paused. Null for a saved track. */
+    val recording: Boolean? = null,
+    val onPauseResume: () -> Unit = {},
+    val onStop: () -> Unit = {},
+    /** Draw it on the map or not. */
+    val onVisible: (Boolean) -> Unit,
+    /** Save it as a file; null hides the button. */
+    val onDownload: (() -> Unit)? = null,
+    /** Zoom to it, or open a map it's on; null hides the button. */
+    val onShowOnMap: (() -> Unit)? = null,
+)
+
+/** Distance, time and ascent, and the day it started; the time ticks while it records. */
+@Composable
+private fun TrackStatsHeader(track: TrackSheet, units: Units, modifier: Modifier = Modifier) {
+    val ticking = track.recording == true
+    val now by produceState(System.currentTimeMillis(), ticking) {
+        while (ticking) {
+            value = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    Column(modifier) {
+        Text(
+            listOfNotNull(
+                Formats.distance(track.distance, units),
+                track.elapsed(now)?.takeIf { it > 0 }?.let(Formats::duration),
+                track.ascent?.takeIf { it >= 1 }?.let { "↑" + Formats.distance(it, units) },
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Medium,
+        )
+        val status = when (track.recording) {
+            true -> "Recording"
+            false -> "Paused"
+            null -> null
+        }
+        val day = track.startedAt?.let { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it)) }
+        listOfNotNull(status, day?.let { "Started $it" }).takeIf { it.isNotEmpty() }?.let {
+            Text(
+                it.joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (track.recording == true) MapStyle.recordingTrack else MaterialTheme.colorScheme.onSurfaceVariant,
+                // Announced when it changes between recording and paused.
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+    }
+}
+
 /** Edit a feature's name, notes and colour. Changes are saved when the sheet closes. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun FeatureEditSheet(
     feature: Feature,
@@ -181,6 +257,8 @@ fun FeatureEditSheet(
     onSave: (Feature) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
+    /** For tracks: their stats, controls and actions; null for anything else. */
+    track: TrackSheet? = null,
 ) {
     // A default name ("Placemark 3") is shown as the field's placeholder, so typing starts fresh.
     val defaultName = feature.name.takeIf(PointNames::isDefault)
@@ -211,10 +289,52 @@ fun FeatureEditSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FeatureIcon(feature.type, icon, Color(color), 24.dp)
                 Spacer(Modifier.size(8.dp))
-                Text(feature.summary(units, format), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                if (track != null) TrackStatsHeader(track, units, Modifier.weight(1f))
+                else Text(feature.summary(units, format), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                 if (feature.type == FeatureType.POINT) {
                     val context = LocalContext.current
                     IconButton(onClick = { copyCoordinates(context, feature.points.first()) }) { Icon(Icons.Filled.ContentCopy, "Copy coordinates") }
+                }
+            }
+            if (track?.recording != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val recording = track.recording
+                    FilledTonalButton(onClick = track.onPauseResume, modifier = Modifier.weight(1f)) {
+                        Icon(if (recording) Icons.Filled.Pause else Icons.Filled.PlayArrow, null, Modifier.size(18.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text(if (recording) "Pause" else "Resume")
+                    }
+                    // Saves or discards (it asks), so it closes the sheet with what's been typed kept.
+                    FilledTonalButton(onClick = { close(); track.onStop() }, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Filled.Stop, null, Modifier.size(18.dp))
+                        Spacer(Modifier.size(6.dp))
+                        Text("Stop")
+                    }
+                }
+            }
+            if (track != null && (track.onShowOnMap != null || track.onDownload != null || onContinueTrack != null)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    track.onShowOnMap?.let { show ->
+                        OutlinedButton(onClick = { close(); show() }) {
+                            Icon(Icons.Filled.CenterFocusStrong, null, Modifier.size(18.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text("Show on map")
+                        }
+                    }
+                    track.onDownload?.let { download ->
+                        OutlinedButton(onClick = { close(); download() }) {
+                            Icon(Icons.Filled.Download, null, Modifier.size(18.dp))
+                            Spacer(Modifier.size(6.dp))
+                            Text("Download")
+                        }
+                    }
+                    if (onContinueTrack != null) {
+                        OutlinedButton(onClick = { close(); onContinueTrack() }) {
+                            Icon(Icons.Filled.FiberManualRecord, null, Modifier.size(18.dp), tint = MapStyle.recordingTrack)
+                            Spacer(Modifier.size(6.dp))
+                            Text("Continue recording")
+                        }
+                    }
                 }
             }
             if (layerName != null) {
@@ -269,6 +389,29 @@ fun FeatureEditSheet(
                     },
                 )
             }
+            if (track != null) {
+                Row(
+                    Modifier.fillMaxWidth().toggleable(feature.visible, role = Role.Switch, onValueChange = track.onVisible),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (feature.visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff, null,
+                        tint = if (feature.visible) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.size(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Shown on the map")
+                        if (track.recording != null) {
+                            Text(
+                                "It keeps recording while it's hidden.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Switch(checked = feature.visible, onCheckedChange = null)
+                }
+            }
             if (onTrail != null) {
                 val on = trailByLayer || feature.trail
                 Row(
@@ -292,7 +435,7 @@ fun FeatureEditSheet(
                     Switch(checked = on, onCheckedChange = null, enabled = !trailByLayer)
                 }
             }
-            if (onContinueTrack != null) {
+            if (onContinueTrack != null && track == null) {
                 OutlinedButton(onClick = { close(); onContinueTrack() }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.FiberManualRecord, null, Modifier.size(18.dp), tint = MapStyle.recordingTrack)
                     Spacer(Modifier.size(6.dp))
@@ -300,7 +443,8 @@ fun FeatureEditSheet(
                 }
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(
+                // The track being recorded is discarded with Stop instead.
+                if (track?.recording == null) TextButton(
                     onClick = { onDelete(); onDismiss() },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) {
@@ -343,6 +487,8 @@ class FeatureListActions(
     val onSeeThrough: (Float) -> Unit,
     val onSeeThroughDone: () -> Unit,
     val onFeatureVisible: (Feature, Boolean) -> Unit,
+    /** Stop the track being recorded (it asks whether to save it). */
+    val onStopLive: () -> Unit = {},
 )
 
 /**
@@ -367,6 +513,8 @@ fun FeatureListSheet(
     expanded: SnapshotStateMap<String, Boolean>,
     actions: FeatureListActions,
     onDismiss: () -> Unit,
+    /** The track being recorded, shown first (null when none is); true while recording, false while paused. */
+    live: Pair<Feature, Boolean>? = null,
 ) {
     var renaming by remember { mutableStateOf<FeatureLayer?>(null) }
     var choosingTrails by remember { mutableStateOf<FeatureLayer?>(null) }
@@ -378,10 +526,12 @@ fun FeatureListSheet(
     val transparent = ListItemDefaults.colors(containerColor = Color.Transparent)
 
     @Composable
-    fun FeatureRow(f: Feature, layerVisible: Boolean = true) {
-        val distance = if (f.type == FeatureType.POINT && myLocation != null) {
-            Formats.distance(Geodesy.distance(myLocation, f.points.first()), units) + " away"
-        } else null
+    fun FeatureRow(f: Feature, layerVisible: Boolean = true, recording: Boolean? = null) {
+        val distance = when {
+            recording != null -> (if (recording) "Recording · " else "Paused · ") + Formats.distance(f.length, units)
+            f.type == FeatureType.POINT && myLocation != null -> Formats.distance(Geodesy.distance(myLocation, f.points.first()), units) + " away"
+            else -> null
+        }
         // Hidden features: the text dims, the controls stay at full strength.
         // Dimmed when the feature or its whole layer is hidden.
         val textAlpha = if (f.visible && layerVisible) 1f else 0.6f
@@ -420,7 +570,8 @@ fun FeatureListSheet(
                 Row {
                     SmallIconButton(Icons.Filled.CenterFocusStrong, "Show ${f.name} on map") { actions.onShow(f) }
                     SmallIconButton(Icons.Filled.Edit, "Edit ${f.name}") { actions.onEdit(f) }
-                    SmallIconButton(Icons.Filled.Delete, "Delete ${f.name}") { deleting = "Delete \"${f.name}\"?" to { actions.onDelete(f) } }
+                    if (recording != null) SmallIconButton(Icons.Filled.Stop, "Stop recording") { actions.onStopLive() }
+                    else SmallIconButton(Icons.Filled.Delete, "Delete ${f.name}") { deleting = "Delete \"${f.name}\"?" to { actions.onDelete(f) } }
                 }
             },
             modifier = Modifier
@@ -457,6 +608,9 @@ fun FeatureListSheet(
                     colors = transparent,
                     modifier = Modifier.clickable(onClickLabel = "Change", role = Role.Button) { choosingBasemap = true },
                 )
+            }
+            live?.let { (f, recording) ->
+                item(key = "live") { FeatureRow(f, recording = recording) }
             }
             val mineOpen = expanded["mine"] != false
             item(key = "mine") {

@@ -261,7 +261,6 @@ private fun MapContent(
     val recentIcons by settings.recentIcons.collectAsState()
     val nameCounts by settings.nameCounts.collectAsState()
     val units by settings.units.collectAsState()
-    val showLiveTrack by settings.showLiveTrack.collectAsState()
     // Each map keeps its own background; one opened before it had a choice gets the default from Settings.
     val defaultBasemap by settings.defaultBasemap.collectAsState()
     LaunchedEffect(session) { if (session.basemapChoice == null) session.setBasemap(defaultBasemap) }
@@ -313,14 +312,19 @@ private fun MapContent(
             TrackRecorder.Status.PAUSED -> {}
         }
     }
-    // A track being continued keeps its own opacity while it grows.
-    val liveOpacity = recording.continuingId?.let { id -> session.features.find { it.id == id }?.opacity }
-    val recordingFeature = remember(recording.points, liveOpacity) {
+    // Drawn and listed as the track it will be saved as: its name, colour and opacity, shown or hidden.
+    val recordingFeature = remember(recording.points, recording.name, recording.notes, recording.color, recording.opacity, recording.visible) {
         Feature(
-            id = RECORDING_ID, type = FeatureType.LINE, name = "", points = recording.points, color = MapStyle.recordingTrack.toArgb(),
-            track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts), opacity = liveOpacity,
+            id = RECORDING_ID, type = FeatureType.LINE, name = recording.name, description = recording.notes,
+            points = recording.points, color = recording.color, opacity = recording.opacity, visible = recording.visible,
+            track = TrackData(recording.times, recording.elevations, segmentStarts = recording.segmentStarts),
         )
     }
+
+    // While a saved track is being continued, the live line (which includes it) replaces it, hidden or not.
+    val shownHere = recording.continuingId?.let { id -> session.shownFeatures.filter { it.id != id } } ?: session.shownFeatures
+    /** What's drawn and tappable: the live track is drawn like any other line, so a long one doesn't hide the map. */
+    val drawnHere = if (recording.points.size >= 2 && recording.visible) shownHere + recordingFeature else shownHere
 
     /**
      * Recording shows on every map while it runs, but a paused track only on maps it's on:
@@ -394,6 +398,14 @@ private fun MapContent(
     var selectedId by remember { mutableStateOf<String?>(null) }
     /** Open in the editor sheet. */
     var editingId by remember { mutableStateOf<String?>(null) }
+    /** A track whose Download was pressed in its sheet. */
+    var exportingTrack by remember { mutableStateOf<String?>(null) }
+    // Saved, discarded or stopped elsewhere: the live track's sheet and highlight go with it.
+    LaunchedEffect(recording.status == TrackRecorder.Status.IDLE) {
+        if (recording.status != TrackRecorder.Status.IDLE) return@LaunchedEffect
+        if (editingId == RECORDING_ID) editingId = null
+        if (selectedId == RECORDING_ID) selectedId = null
+    }
     var showList by remember { mutableStateOf(false) }
     // Shown once each time the background map comes on screen (map opened or switched on);
     // if it's switched on from the Features sheet, wait until the sheet closes.
@@ -546,6 +558,18 @@ private fun MapContent(
     fun openEditor(id: String) {
         selectedId = id
         editingId = id
+    }
+
+    fun pauseOrResume() {
+        if (recording.status == TrackRecorder.Status.RECORDING) {
+            // Let fixes batched while the screen was off arrive first.
+            scope.launch {
+                TrackRecorder.awaitPendingFixes()
+                TrackRecorder.pause(context.applicationContext)
+            }
+        }
+        else if (!hasPreciseLocation()) askForPreciseLocation()
+        else resumeGap(recording, location)?.let { resumingFar = it } ?: TrackRecorder.resume(context.applicationContext)
     }
 
     /** Saves the recording (see [TrackRecorder.stop]) and opens it, if it's on this map. */
@@ -922,7 +946,7 @@ private fun MapContent(
                     }
                 } else {
                     val pinHeight = with(density) { MapStyle.pinHeight.toPx() }
-                    val hit = hitTest(session.shownFeatures, pos, session.geometry!!, viewport, density.density, pinHeight)
+                    val hit = hitTest(drawnHere, pos, session.geometry!!, viewport, density.density, pinHeight)
                     if (hit != null) {
                         openEditor(hit.id)
                     } else {
@@ -952,11 +976,8 @@ private fun MapContent(
             seeThrough = if (basemapSource != null && proj != null) session.seeThrough else 0f,
         ) {
             if (proj != null) {
-                // While a saved track is being continued, the live line (which includes it) replaces it,
-                // hidden or not.
-                val shown = recording.continuingId?.let { id -> session.shownFeatures.filter { it.id != id } } ?: session.shownFeatures
-                // The live track is drawn like any other line, so a long one doesn't hide the map.
-                val lines = if (recording.points.size >= 2 && showLiveTrack) shown + recordingFeature else shown
+                val shown = shownHere
+                val lines = drawnHere
                 val mid = viewport.toScreen(viewport.center)
                 val metersPerDp = Geodesy.distance(proj.toLatLon(mid), proj.toLatLon(mid + Offset(100f, 0f))) / 100 * this.density
                 drawShapes(lines, selectedId, session.geometry!!, viewport, quietLineWidthDp(metersPerDp))
@@ -1152,20 +1173,11 @@ private fun MapContent(
                         RecordingBar(
                             state = recording,
                             units = units,
-                            onPauseResume = {
-                                if (recording.status == TrackRecorder.Status.RECORDING) {
-                                    // Let fixes batched while the screen was off arrive first.
-                                    scope.launch {
-                                        TrackRecorder.awaitPendingFixes()
-                                        TrackRecorder.pause(context.applicationContext)
-                                    }
-                                }
-                                else if (!hasPreciseLocation()) askForPreciseLocation()
-                                else resumeGap(recording, location)?.let { resumingFar = it } ?: TrackRecorder.resume(context.applicationContext)
-                            },
+                            onPauseResume = ::pauseOrResume,
                             onStop = { if (!savingTrack) showStopTrack = true },
-                            trackShown = showLiveTrack,
-                            onTrackShown = settings::setShowLiveTrack,
+                            trackShown = recording.visible,
+                            onTrackShown = TrackRecorder::setVisible,
+                            onOpen = { openEditor(RECORDING_ID) },
                         )
                     }
                     // Every mode fits the same fixed height, so the panel never resizes.
@@ -1325,7 +1337,44 @@ private fun MapContent(
         }
     }
 
+    // The track being recorded: the same sheet as a saved track, with its controls.
+    if (editingId == RECORDING_ID && recording.status != TrackRecorder.Status.IDLE) {
+        FeatureEditSheet(
+            feature = recordingFeature,
+            units = units,
+            format = format,
+            layerName = null,
+            onNavigate = {},
+            onContinueTrack = null,
+            trailByLayer = false,
+            onTrail = null,
+            recentIcons = emptyList(),
+            onIconUsed = {},
+            nameCounts = emptyMap(),
+            onNameUsed = {},
+            onSave = { TrackRecorder.edit(it.name, it.description, it.color, it.opacity, it.visible) },
+            onDelete = {},
+            onDismiss = { editingId = null },
+            track = TrackSheet(
+                distance = recording.distance,
+                elapsed = recording::elapsedMillis,
+                ascent = recording.ascent,
+                startedAt = recording.startedAt,
+                recording = recording.status == TrackRecorder.Status.RECORDING,
+                onPauseResume = ::pauseOrResume,
+                onStop = { if (!savingTrack) showStopTrack = true },
+                onVisible = TrackRecorder::setVisible,
+                onShowOnMap = if (recording.points.isEmpty()) null else ({
+                    TrackRecorder.setVisible(true)
+                    showFeatures(listOf(recordingFeature))
+                    selectedId = RECORDING_ID
+                }),
+            ),
+        )
+    }
+
     session.features.find { it.id == editingId }?.let { f ->
+        val layer = session.layers.find { it.id == f.layerId }
         FeatureEditSheet(
             feature = f,
             units = units,
@@ -1364,12 +1413,25 @@ private fun MapContent(
                 scope.launch { if (replaceMessage("\"${f.name}\" deleted", "Undo")) session.upsert(f) }
             },
             onDismiss = { editingId = null }, // stays highlighted until the next tap on the map
+            track = if (f.type == FeatureType.LINE && (f.track != null || layer?.kind == LayerKind.TRACKS)) TrackSheet(
+                distance = f.length,
+                elapsed = { f.track?.resumeMillis },
+                ascent = f.track?.ascent,
+                startedAt = f.track?.times?.firstOrNull { it != null } ?: f.createdAt.takeIf { layer?.kind == LayerKind.TRACKS },
+                onVisible = { visible ->
+                    if (!visible && f.id == selectedId) selectedId = null
+                    session.setFeatureVisible(f.id, visible)
+                },
+                onDownload = { exportingTrack = f.id },
+                onShowOnMap = { showFeature(f) },
+            ) else null,
         )
     }
 
     if (showList) {
         FeatureListSheet(
-            features = session.features,
+            // The track being continued is listed as the live track instead.
+            features = recording.continuingId?.let { id -> session.features.filter { it.id != id } } ?: session.features,
             layers = session.layers,
             basemap = basemapSource,
             basemaps = basemaps,
@@ -1394,12 +1456,20 @@ private fun MapContent(
                 },
                 onShow = { f ->
                     showList = false
-                    showFeature(f)
+                    if (f.id == RECORDING_ID) {
+                        TrackRecorder.setVisible(true)
+                        showFeatures(listOf(recordingFeature))
+                        selectedId = RECORDING_ID
+                    } else showFeature(f)
                 },
                 onEdit = { f ->
                     showList = false
-                    session.reveal(f) // so the edited feature is visible afterwards
+                    if (f.id != RECORDING_ID) session.reveal(f) // so the edited feature is visible afterwards
                     openEditor(f.id)
+                },
+                onStopLive = {
+                    showList = false
+                    if (!savingTrack) showStopTrack = true
                 },
                 onDelete = { f ->
                     if (f.id == editingId) editingId = null
@@ -1442,10 +1512,11 @@ private fun MapContent(
                 onSeeThroughDone = session::saveSeeThrough,
                 onFeatureVisible = { f, visible ->
                     if (!visible && f.id == selectedId) selectedId = null
-                    session.setFeatureVisible(f.id, visible)
+                    if (f.id == RECORDING_ID) TrackRecorder.setVisible(visible) else session.setFeatureVisible(f.id, visible)
                 },
             ),
             onDismiss = { showList = false },
+            live = if (recordingHere) recordingFeature to (recording.status == TrackRecorder.Status.RECORDING) else null,
         )
     }
 
@@ -1553,6 +1624,31 @@ private fun MapContent(
     }
 
     if (showInfo) MapInfoDialog(entry, myLatLon, format, units, basemapSource) { showInfo = false }
+    // Looked up each time, so a track that changes while the dialog is open is exported as it is then.
+    exportingTrack?.let { id ->
+        val track = session.features.firstOrNull { it.id == id } ?: return@let
+        val layers = session.layers.filter { it.id == track.layerId }
+        ExportDialog(
+            defaultName = track.name,
+            features = listOf(track),
+            layers = layers,
+            title = "Download track",
+            defaultKml = false,
+            onDownload = { name, kml, chosen ->
+                exportingTrack = null
+                scope.launch {
+                    val result = exportFeatures(context, name, chosen, layers, kml)
+                    when {
+                        result == null -> showMessage("Couldn't export the track. Storage may be full.")
+                        result.savedAs == null -> shareExport(context, result.export)
+                        replaceMessage("Saved ${result.savedAs} to Downloads", "Share", SnackbarDuration.Long) -> shareExport(context, result.export)
+                    }
+                }
+            },
+            onDismiss = { exportingTrack = null },
+        )
+    }
+
     if (exporting) ExportDialog(
         defaultName = entry.name,
         features = session.features,

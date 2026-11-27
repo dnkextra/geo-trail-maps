@@ -114,15 +114,6 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("routeNoticeShown", false)
         set(value) = prefs.edit { putBoolean("routeNoticeShown", value) }
 
-    private val _showLiveTrack = MutableStateFlow(prefs.getBoolean("showLiveTrack", true))
-    /** Whether the track being recorded is drawn on the map (recording carries on either way). */
-    val showLiveTrack: StateFlow<Boolean> = _showLiveTrack
-
-    fun setShowLiveTrack(value: Boolean) {
-        prefs.edit { putBoolean("showLiveTrack", value) }
-        _showLiveTrack.value = value
-    }
-
     private val _reopenLastMap = MutableStateFlow(prefs.getBoolean("reopenLastMap", true))
     /** Whether the app starts on the map left open last time, when you're on or near it. */
     val reopenLastMap: StateFlow<Boolean> = _reopenLastMap

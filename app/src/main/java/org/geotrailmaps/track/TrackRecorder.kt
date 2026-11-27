@@ -27,6 +27,7 @@ import java.util.Locale
 import org.geotrailmaps.geo.Geodesy
 import org.geotrailmaps.geo.LatLon
 import java.io.File
+import java.util.Base64
 
 /**
  * Records a GPS track. Lives for the whole process so recording carries on while you switch
@@ -60,6 +61,19 @@ object TrackRecorder {
         val resumedAt: Long = 0,
         /** When it was paused, while paused. */
         val pausedAt: Long = 0,
+        /** What it's saved with: set when it starts (from the track continued), and changeable while it records. */
+        val name: String = "",
+        val notes: String = "",
+        val color: Int = MapStyle.recordingTrack.toArgb(),
+        /** As [Feature.opacity]: null for the default. */
+        val opacity: Float? = null,
+        /** Whether it's drawn on the map; it records either way. */
+        val visible: Boolean = true,
+        /**
+         * False only for a track recovered from a log written before tracks had these: then Stop
+         * keeps the continued track's own name and look.
+         */
+        val styled: Boolean = false,
     ) {
         fun elapsedMillis(now: Long = System.currentTimeMillis()) =
             pastMillis + if (status == Status.RECORDING) (now - resumedAt).coerceAtLeast(0) else 0
@@ -127,8 +141,12 @@ object TrackRecorder {
         generation++
         recordedOn.clear()
         gap = from != null
-        var s = State(status = Status.RECORDING, startedAt = now, resumedAt = now, continuingId = from?.id)
-        val log = StringBuilder("START,$now,${from?.id ?: ""}\n")
+        var s = State(
+            status = Status.RECORDING, startedAt = now, resumedAt = now, continuingId = from?.id,
+            name = from?.name ?: defaultName(now), notes = from?.description ?: "",
+            color = from?.color ?: MapStyle.recordingTrack.toArgb(), opacity = from?.opacity, styled = true,
+        )
+        val log = StringBuilder("START,$now,${from?.id ?: ""}\n${styleLine(s)}\n")
         if (from != null) {
             // Carry the saved track over, so distance and time continue from it.
             val past = from.track?.resumeMillis ?: 0L
@@ -154,6 +172,28 @@ object TrackRecorder {
         startService(context)
         return true
     }
+
+    /** Changes what the track being recorded is saved with, and whether it's drawn. */
+    fun edit(name: String, notes: String, color: Int, opacity: Float?, visible: Boolean) {
+        val s = _state.value
+        if (s.status == Status.IDLE) return
+        val edited = s.copy(name = name, notes = notes, color = color, opacity = opacity, visible = visible, styled = true)
+        if (edited == s) return
+        _state.value = edited
+        append(styleLine(edited))
+    }
+
+    fun setVisible(visible: Boolean) = _state.value.let { edit(it.name, it.notes, it.color, it.opacity, visible) }
+
+    // Name and notes in Base64, so commas and line breaks in them can't break the log's lines.
+    private fun styleLine(s: State) = listOf(
+        "STYLE", b64(s.name), b64(s.notes), s.color.toString(), s.opacity?.toString() ?: "", if (s.visible) "1" else "0",
+    ).joinToString(",")
+
+    private fun b64(text: String) = Base64.getEncoder().encodeToString(text.toByteArray())
+    private fun unb64(text: String) = String(Base64.getDecoder().decode(text))
+
+    private fun defaultName(startedAt: Long) = "Track " + SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(startedAt))
 
     fun pause(context: Context) {
         val s = _state.value
@@ -212,14 +252,24 @@ object TrackRecorder {
         val continued = g.features.find { it.id == track.continuingId }
         val layer = g.layers.find { it.kind == LayerKind.TRACKS }
             ?: FeatureLayer(name = "Recorded tracks", color = MapStyle.recordingTrack.toArgb(), kind = LayerKind.TRACKS)
-        val saved = continued?.copy(points = track.points, track = data, visible = true) ?: Feature(
-            type = FeatureType.LINE,
-            name = "Track " + SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(track.startedAt)),
-            points = track.points,
-            color = layer.color,
-            layerId = layer.id,
-            track = data,
-        )
+        val saved = when {
+            continued == null -> Feature(
+                type = FeatureType.LINE,
+                name = track.name.ifBlank { defaultName(track.startedAt) },
+                description = track.notes,
+                points = track.points,
+                color = if (track.styled) track.color else layer.color,
+                layerId = layer.id,
+                track = data,
+                opacity = track.opacity,
+                visible = track.visible,
+            )
+            track.styled -> continued.copy(
+                points = track.points, track = data, name = track.name.ifBlank { continued.name }, description = track.notes,
+                color = track.color, opacity = track.opacity, visible = track.visible,
+            )
+            else -> continued.copy(points = track.points, track = data, visible = true)
+        }
         val job = store.updateGlobal(notify = false) { d ->
             if (continued != null) d.withFeature(saved.id) { saved }
             else d.copy(layers = if (d.layers.any { it.id == layer.id }) d.layers else listOf(layer) + d.layers, features = d.features + saved)
@@ -334,7 +384,7 @@ object TrackRecorder {
                     points.clear(); times.clear(); elevations.clear(); segmentStarts.clear()
                     s = State(
                         status = Status.RECORDING, startedAt = it, resumedAt = it,
-                        continuingId = v.getOrNull(2)?.ifEmpty { null },
+                        continuingId = v.getOrNull(2)?.ifEmpty { null }, name = defaultName(it),
                     )
                 }
                 "BASE" -> {
@@ -349,6 +399,10 @@ object TrackRecorder {
                 }
                 "SEG" -> newSegment = true
                 "LINK" -> s = s.copy(continuingId = v[1].ifEmpty { null })
+                "STYLE" -> s = s.copy(
+                    name = unb64(v[1]), notes = unb64(v[2]), color = v[3].toInt(),
+                    opacity = v[4].toFloatOrNull(), visible = v[5] != "0", styled = true,
+                )
                 "P" -> {
                     val p = LatLon(v[1].toDouble(), v[2].toDouble())
                     val alt = v[3].toDoubleOrNull()
