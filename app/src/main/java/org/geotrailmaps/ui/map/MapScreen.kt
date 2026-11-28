@@ -410,8 +410,8 @@ private fun MapContent(
     var selectedId by remember { mutableStateOf<String?>(null) }
     /** Open in the editor sheet. */
     var editingId by remember { mutableStateOf<String?>(null) }
-    /** A track whose Download was pressed in its sheet. */
-    var exportingTrack by remember { mutableStateOf<String?>(null) }
+    /** A feature whose Download was pressed, in its sheet or its row in Layers. */
+    var exportingFeature by remember { mutableStateOf<String?>(null) }
     var showList by remember { mutableStateOf(false) }
     // Shown once each time the background map comes on screen (map opened or switched on);
     // if it's switched on from the Features sheet, wait until the sheet closes.
@@ -621,11 +621,7 @@ private fun MapContent(
         savingTrack = true
         scope.launch {
             try {
-                TrackRecorder.awaitPendingFixes()
-                TrackRecorder.stop(context.applicationContext)
-                TrackRecorder.awaitSaved()
-                // A failed save comes back paused (the recorder says so): don't replace it.
-                if (TrackRecorder.state.value.status != TrackRecorder.Status.IDLE) return@launch
+                if (!TrackRecorder.stopAndWait(context.applicationContext)) return@launch
                 val from = to.continuing?.let { f -> session.features.find { it.id == f.id } }
                 if (from == null) startRecording() else continueTrack(from)
             } finally {
@@ -1373,9 +1369,7 @@ private fun MapContent(
             format = format,
             layerName = session.layers.find { it.id == f.layerId }?.name,
             // Tracks (recorded, or imported with times) can be extended by recording more.
-            onContinueTrack = if (f.type == FeatureType.LINE && f.layerId != null && f.id != recording.trackId &&
-                (f.track != null || layer?.kind == LayerKind.TRACKS)
-            ) ({ requestRecording(f) }) else null,
+            onContinueTrack = if (canContinue(f, layer, recording)) ({ requestRecording(f) }) else null,
             trailByLayer = Trails.byLayer(f, session.layers.find { it.id == f.layerId }),
             onTrail = if (f.type == FeatureType.LINE) ({ on -> session.setFeatureTrail(f.id, on) }) else null,
             recentIcons = recentIcons,
@@ -1405,27 +1399,19 @@ private fun MapContent(
                 scope.launch { if (replaceMessage("\"${f.name}\" deleted", "Undo")) session.upsert(f) }
             },
             onDismiss = { editingId = null }, // stays highlighted until the next tap on the map
-            track = if (f.type == FeatureType.LINE && (f.track != null || layer?.kind == LayerKind.TRACKS)) {
-                val live = f.id == recording.trackId
-                val maps = remember(f.points, allMaps) { trackMaps(f, allMaps, entry.id) }
-                TrackSheet(
-                    distance = if (live) recording.distance else f.length,
-                    elapsed = if (live) recording::elapsedMillis else ({ f.track?.resumeMillis }),
-                    ascent = if (live) recording.ascent else f.track?.ascent,
-                    startedAt = if (live) recording.startedAt else f.track?.times?.firstOrNull { it != null } ?: f.createdAt.takeIf { layer?.kind == LayerKind.TRACKS },
-                    recording = if (live) recording.status == TrackRecorder.Status.RECORDING else null,
-                    onPauseResume = ::pauseOrResume,
-                    onStop = { if (!savingTrack) showStopTrack = true },
-                    onVisible = { visible ->
-                        if (!visible && f.id == selectedId) selectedId = null
-                        session.setFeatureVisible(f.id, visible)
-                    },
-                    onDownload = { exportingTrack = f.id },
-                    maps = maps,
-                    onOpenMap = { m -> if (m.here) showFeature(f) else onShowTrackOn(m.id, f.id) },
-                    layerHiddenHere = layer?.visible == false,
-                )
-            } else null,
+            track = trackSheetFor(
+                f, layer, recording,
+                maps = remember(f.points, allMaps) { trackMaps(f, allMaps, entry.id) },
+                onPauseResume = ::pauseOrResume,
+                onStop = { if (!savingTrack) showStopTrack = true },
+                onVisible = { visible ->
+                    if (!visible && f.id == selectedId) selectedId = null
+                    session.setFeatureVisible(f.id, visible)
+                },
+                onDownload = { exportingFeature = f.id },
+                onOpenMap = { m -> if (m.here) showFeature(f) else onShowTrackOn(m.id, f.id) },
+                layerHiddenHere = layer?.visible == false,
+            ),
         )
     }
 
@@ -1464,6 +1450,7 @@ private fun MapContent(
                     session.reveal(f) // so the edited feature is visible afterwards
                     openEditor(f.id)
                 },
+                onDownload = { f -> exportingFeature = f.id },
                 onDelete = { f ->
                     if (f.id == editingId) editingId = null
                     if (f.id == selectedId) selectedId = null
@@ -1586,27 +1573,29 @@ private fun MapContent(
 
     if (showInfo) MapInfoDialog(entry, myLatLon, format, units, basemapSource) { showInfo = false }
     // Looked up each time, so a track that changes while the dialog is open is exported as it is then.
-    exportingTrack?.let { id ->
+    exportingFeature?.let { id ->
         val track = session.features.firstOrNull { it.id == id } ?: return@let
         val layers = session.layers.filter { it.id == track.layerId }
+        val isTrack = isTrack(track, layers.firstOrNull())
         ExportDialog(
             defaultName = track.name,
             features = listOf(track),
             layers = layers,
-            title = "Download track",
-            defaultKml = false,
+            title = if (isTrack) "Download track" else "Download feature",
+            // GPX suits a track; KML keeps a placemark's icon and an area's shape.
+            defaultKml = !isTrack,
             onDownload = { name, kml, chosen ->
-                exportingTrack = null
+                exportingFeature = null
                 scope.launch {
                     val result = exportFeatures(context, name, chosen, layers, kml)
                     when {
-                        result == null -> showMessage("Couldn't export the track. Storage may be full.")
+                        result == null -> showMessage("Couldn't export \"${track.name}\". Storage may be full.")
                         result.savedAs == null -> shareExport(context, result.export)
                         replaceMessage("Saved ${result.savedAs} to Downloads", "Share", SnackbarDuration.Long) -> shareExport(context, result.export)
                     }
                 }
             },
-            onDismiss = { exportingTrack = null },
+            onDismiss = { exportingFeature = null },
         )
     }
 

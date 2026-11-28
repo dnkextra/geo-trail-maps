@@ -55,7 +55,22 @@ import org.geotrailmaps.ui.map.ResumeGapDialog
 import org.geotrailmaps.ui.map.resumeGap
 import org.geotrailmaps.ui.map.StopTrackDialog
 import org.geotrailmaps.ui.map.FeatureEditSheet
-import org.geotrailmaps.ui.map.TrackSheet
+import org.geotrailmaps.ui.map.SwitchTrackDialog
+import org.geotrailmaps.ui.map.FeatureIcon
+import org.geotrailmaps.ui.map.isTrack
+import org.geotrailmaps.ui.map.canContinue
+import org.geotrailmaps.ui.map.trackSheetFor
+import org.geotrailmaps.ui.map.summary
+import org.geotrailmaps.data.Settings
+import org.geotrailmaps.data.FeatureType
+import org.geotrailmaps.data.Trails
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import org.geotrailmaps.ui.map.trackMaps
 import org.geotrailmaps.data.TrackData
 import org.geotrailmaps.data.CoordinateFormat
@@ -79,9 +94,8 @@ import java.util.Date
 @Composable
 fun TracksScreen(
     library: MapLibrary,
+    settings: Settings,
     maps: List<MapEntry>,
-    units: Units,
-    format: CoordinateFormat,
     location: Location?,
     /** Opens map (first) zoomed to track (second). */
     onShowTrackOn: (String, String) -> Unit,
@@ -93,7 +107,15 @@ fun TracksScreen(
     val snackbar = remember { SnackbarHostState() }
     val global by library.global.collectAsState()
     val recording by TrackRecorder.state.collectAsState()
+    val units by settings.units.collectAsState()
+    val format by settings.coordinateFormat.collectAsState()
+    val recentIcons by settings.recentIcons.collectAsState()
+    val nameCounts by settings.nameCounts.collectAsState()
     var showStop by remember { mutableStateOf(false) }
+    /** Continue pressed while another track is recording or paused: confirmed, as that one stops. */
+    var switchingTo by remember { mutableStateOf<Feature?>(null) }
+    // The recording notification needs this; recording works without it, just silently.
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     /** Resume pressed this far (m) from where the track was paused: asked first. */
     var resumingFar by remember { mutableStateOf<Double?>(null) }
     // Stopped from the notification meanwhile: there's nothing left to stop.
@@ -101,6 +123,7 @@ fun TracksScreen(
         if (recording.status == TrackRecorder.Status.IDLE) {
             showStop = false
             resumingFar = null
+            switchingTo = null
         }
     }
     var saving by remember { mutableStateOf(false) }
@@ -136,6 +159,22 @@ fun TracksScreen(
         } else {
             resumeGap(recording, location)?.let { resumingFar = it } ?: TrackRecorder.resume(context.applicationContext)
         }
+    }
+
+    fun hasPreciseLocation() = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    /** Records more onto [f], as from its sheet on a map. Tracks here are all on every map already. */
+    fun continueTrack(f: Feature) {
+        if (!hasPreciseLocation()) return run { show("Recording a track needs precise location. Allow it in Android's settings for this app.") }
+        if (context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (!TrackRecorder.start(context.applicationContext, f)) return run { show("Still saving the last track. Try again in a moment.") }
+        show("Continuing \"${f.name}\".")
+    }
+
+    fun requestContinue(f: Feature) {
+        if (recording.status != TrackRecorder.Status.IDLE) switchingTo = f else continueTrack(f)
     }
 
     fun stop(name: String?) {
@@ -197,7 +236,9 @@ fun TracksScreen(
                     val count = remember(f.points, maps) { trackMaps(f, maps, null).size }
                     TrackRow(
                         f = f,
+                        isTrack = isTrack(f, layer),
                         units = units,
+                        format = format,
                         mapCount = count,
                         recording = if (f.id == recording.trackId) recording.status == TrackRecorder.Status.RECORDING else null,
                         onOpen = { editingId = f.id },
@@ -217,26 +258,27 @@ fun TracksScreen(
     }
 
     features.find { it.id == editingId }?.let { f ->
-        val live = f.id == recording.trackId
-        val onMaps = remember(f.points, maps) { trackMaps(f, maps, null) }
+        val layer = global.layers.find { it.id == f.layerId }
         FeatureEditSheet(
             feature = f,
             units = units,
             format = format,
-            layerName = global.layers.find { it.id == f.layerId }?.name,
-            onNavigate = {},
-            // Continued from a map, where it can be seen.
-            onContinueTrack = null,
-            trailByLayer = false,
-            onTrail = null,
-            recentIcons = emptyList(),
-            onIconUsed = {},
-            nameCounts = emptyMap(),
-            onNameUsed = {},
-            // Only what the sheet changes: the points are the recorder's while it records.
+            layerName = layer?.name,
+            // Navigating needs a map to navigate on.
+            onNavigate = null,
+            onContinueTrack = if (canContinue(f, layer, recording)) ({ requestContinue(f) }) else null,
+            trailByLayer = Trails.byLayer(f, layer),
+            onTrail = if (f.type == FeatureType.LINE) ({ on -> library.updateGlobal { d -> d.withFeature(f.id) { it.copy(trail = on) } } }) else null,
+            recentIcons = recentIcons,
+            onIconUsed = settings::iconUsed,
+            nameCounts = nameCounts,
+            onNameUsed = settings::nameUsed,
+            // Only what the sheet changes: a track's points are the recorder's while it records.
             onSave = { e ->
                 library.updateGlobal { d ->
-                    d.withFeature(f.id) { it.copy(name = e.name, description = e.description, color = e.color, opacity = e.opacity, visible = e.visible) }
+                    d.withFeature(f.id) {
+                        it.copy(name = e.name, description = e.description, color = e.color, opacity = e.opacity, visible = e.visible, icon = e.icon, time = e.time)
+                    }
                 }
             },
             onDelete = {
@@ -250,19 +292,38 @@ fun TracksScreen(
                 }
             },
             onDismiss = { editingId = null },
-            track = TrackSheet(
-                distance = if (live) recording.distance else f.length,
-                elapsed = if (live) recording::elapsedMillis else ({ f.track?.resumeMillis }),
-                ascent = if (live) recording.ascent else f.track?.ascent,
-                startedAt = if (live) recording.startedAt else f.track?.times?.firstOrNull { it != null } ?: f.createdAt,
-                recording = if (live) recording.status == TrackRecorder.Status.RECORDING else null,
+            track = trackSheetFor(
+                f, layer, recording,
+                maps = remember(f.points, maps) { trackMaps(f, maps, null) },
                 onPauseResume = ::pauseOrResume,
                 onStop = { if (!saving) showStop = true },
                 onVisible = { setVisible(f, it) },
                 onDownload = { exportingTrack = f.id },
-                maps = onMaps,
                 onOpenMap = { m -> onShowTrackOn(m.id, f.id) },
             ),
+        )
+    }
+
+    switchingTo?.let { to ->
+        SwitchTrackDialog(
+            current = global.features.find { it.id == recording.trackId }?.name ?: "The current track",
+            continuing = to.name,
+            onConfirm = {
+                switchingTo = null
+                if (!saving) {
+                    saving = true
+                    scope.launch {
+                        try {
+                            if (TrackRecorder.stopAndWait(context.applicationContext)) {
+                                global.features.find { it.id == to.id }?.let(::continueTrack)
+                            }
+                        } finally {
+                            saving = false
+                        }
+                    }
+                }
+            },
+            onDismiss = { switchingTo = null },
         )
     }
 
@@ -312,14 +373,15 @@ fun TracksScreen(
             features = listOf(track),
             layers = listOf(layer),
             // Tracks lists every global layer, so this can be a placemark or area too.
-            title = if (track.track != null) "Download track" else "Download feature",
-            defaultKml = false,
+            title = if (isTrack(track, layer)) "Download track" else "Download feature",
+            // GPX suits a track; KML keeps a placemark's icon and an area's shape.
+            defaultKml = !isTrack(track, layer),
             onDownload = { name, kml, chosen ->
                 exportingTrack = null
                 scope.launch {
                     val result = exportFeatures(context, name, chosen, listOf(layer), kml)
                     when {
-                        result == null -> show("Couldn't export the track. Storage may be full.")
+                        result == null -> show("Couldn't export \"${track.name}\". Storage may be full.")
                         result.savedAs == null -> shareExport(context, result.export)
                         else -> {
                             snackbar.currentSnackbarData?.dismiss()
@@ -351,7 +413,10 @@ private fun LayerHeader(layer: FeatureLayer, count: Int, onDelete: () -> Unit) {
 @Composable
 private fun TrackRow(
     f: Feature,
+    /** A track: dated, with its length; anything else (from a layer shown on all maps) shows its summary. */
+    isTrack: Boolean,
     units: Units,
+    format: CoordinateFormat,
     /** How many maps it crosses. */
     mapCount: Int,
     /** For the track being recorded: true while recording, false while paused; null otherwise. */
@@ -378,15 +443,27 @@ private fun TrackRow(
                 modifier = Modifier.semantics { contentDescription = "Show ${f.name}" },
             )
         },
-        headlineContent = { Text(f.name, Modifier.alpha(textAlpha)) },
+        headlineContent = {
+            Row(Modifier.alpha(textAlpha), verticalAlignment = Alignment.CenterVertically) {
+                // Points and areas from layers shown on all maps are listed here too: say which is which.
+                if (!isTrack) {
+                    FeatureIcon(f.type, f.icon, Color(f.color), 16.dp)
+                    Spacer(Modifier.size(6.dp))
+                }
+                Text(f.name)
+            }
+        },
         supportingContent = {
             Column(Modifier.alpha(textAlpha)) {
                 Text(
-                    listOfNotNull(
+                    if (!isTrack) f.summary(units, format)
+                    else listOfNotNull(
                         when (recording) { true -> "Recording"; false -> "Paused"; null -> null },
                         DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(started)),
                         Formats.distance(length, units),
                     ).joinToString(" · "),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     when (mapCount) {

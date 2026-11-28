@@ -328,6 +328,18 @@ object TrackRecorder {
         return saved
     }
 
+    /**
+     * Stops the current track (it's kept) once batched fixes are in, and waits for it to be
+     * written. True when nothing is recording any more; false if the save failed, which brings
+     * the track back paused (and says so), so nothing should replace it.
+     */
+    suspend fun stopAndWait(context: Context): Boolean {
+        awaitPendingFixes()
+        stop(context)
+        awaitSaved()
+        return _state.value.status == Status.IDLE
+    }
+
     /** Ends the recording without saving it, and deletes its recovery log. */
     fun discard(context: Context) {
         finish(context)

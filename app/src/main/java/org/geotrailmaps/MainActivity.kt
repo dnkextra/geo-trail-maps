@@ -241,7 +241,6 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
     val maps by app.library.maps.collectAsState()
     val location by app.tracker.location.collectAsState()
     val units by app.settings.units.collectAsState()
-    val format by app.settings.coordinateFormat.collectAsState()
     val mapSort by app.settings.mapSort.collectAsState()
     val openEntry = maps.find { it.id == openMapId }
 
@@ -249,9 +248,8 @@ private fun AppRoot(app: App, incoming: MutableStateFlow<Uri?>) {
         showSettings -> SettingsScreen(app.settings, onBack = { showSettings = false })
         showTracks -> TracksScreen(
             library = app.library,
+            settings = app.settings,
             maps = maps,
-            units = units,
-            format = format,
             location = location,
             onShowTrackOn = { map, track -> showTracks = false; focusFeatureId = track; openMapId = map },
             onBack = { showTracks = false },

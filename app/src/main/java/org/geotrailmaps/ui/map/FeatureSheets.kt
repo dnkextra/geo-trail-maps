@@ -135,6 +135,7 @@ import org.geotrailmaps.geo.LatLon
 import org.geotrailmaps.ui.ConfirmDeleteDialog
 import org.geotrailmaps.ui.RenameDialog
 import org.geotrailmaps.ui.theme.MapStyle
+import org.geotrailmaps.track.TrackRecorder
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -196,6 +197,49 @@ class TrackSheet(
     /** Shown on but its layer is hidden on the map this was opened from: it isn't drawn there. */
     val layerHiddenHere: Boolean = false,
 )
+
+/** Whether [f] (in [layer]) is a track: a line with times, or one in the recorded tracks. */
+fun isTrack(f: Feature, layer: FeatureLayer?) = f.type == FeatureType.LINE && (f.track != null || layer?.kind == LayerKind.TRACKS)
+
+/** Whether more can be recorded onto [f]: a track in a layer, and not the one being recorded. */
+fun canContinue(f: Feature, layer: FeatureLayer?, recording: TrackRecorder.State) =
+    isTrack(f, layer) && f.layerId != null && f.id != recording.trackId
+
+/**
+ * The track part of [f]'s sheet, or null if it isn't a track. Built here for the map and the
+ * Tracks screen alike, so a track's sheet is the same wherever it's opened; only what depends
+ * on being on a map ([maps] marked "This map", [layerHiddenHere]) differs.
+ */
+fun trackSheetFor(
+    f: Feature,
+    layer: FeatureLayer?,
+    recording: TrackRecorder.State,
+    maps: List<TrackMap>,
+    onPauseResume: () -> Unit,
+    onStop: () -> Unit,
+    onVisible: (Boolean) -> Unit,
+    onDownload: () -> Unit,
+    onOpenMap: (TrackMap) -> Unit,
+    layerHiddenHere: Boolean = false,
+): TrackSheet? {
+    if (!isTrack(f, layer)) return null
+    val live = f.id == recording.trackId && recording.status != TrackRecorder.Status.IDLE
+    return TrackSheet(
+        distance = if (live) recording.distance else f.length,
+        elapsed = if (live) recording::elapsedMillis else ({ f.track?.resumeMillis }),
+        ascent = if (live) recording.ascent else f.track?.ascent,
+        startedAt = if (live) recording.startedAt
+        else f.track?.times?.firstOrNull { it != null } ?: f.createdAt.takeIf { layer?.kind == LayerKind.TRACKS },
+        recording = if (live) recording.status == TrackRecorder.Status.RECORDING else null,
+        onPauseResume = onPauseResume,
+        onStop = onStop,
+        onVisible = onVisible,
+        onDownload = onDownload,
+        maps = maps,
+        onOpenMap = onOpenMap,
+        layerHiddenHere = layerHiddenHere,
+    )
+}
 
 /** A map a track crosses. [here]: the map the sheet was opened from. */
 data class TrackMap(val id: String, val name: String, val here: Boolean = false, val archived: Boolean = false)
@@ -280,8 +324,8 @@ fun FeatureEditSheet(
     format: CoordinateFormat,
     /** Name of the imported layer the feature belongs to, if any. */
     layerName: String?,
-    /** Start navigating to this placemark. */
-    onNavigate: () -> Unit,
+    /** Start navigating to this placemark; null hides the button (no map to navigate on). */
+    onNavigate: (() -> Unit)?,
     /** Record more onto this track; null hides the button. */
     onContinueTrack: (() -> Unit)?,
     /** For lines: whether its layer already makes it a trail. */
@@ -487,7 +531,7 @@ fun FeatureEditSheet(
                     Text("Delete")
                 }
                 Spacer(Modifier.weight(1f))
-                if (feature.type == FeatureType.POINT) {
+                if (feature.type == FeatureType.POINT && onNavigate != null) {
                     OutlinedButton(onClick = { close(); onNavigate() }) {
                         Icon(Icons.Filled.Navigation, null, Modifier.size(18.dp))
                         Spacer(Modifier.size(6.dp))
@@ -507,6 +551,8 @@ class FeatureListActions(
     val onAddTrails: () -> Unit,
     val onShow: (Feature) -> Unit,
     val onEdit: (Feature) -> Unit,
+    /** Save one feature as a file. */
+    val onDownload: (Feature) -> Unit,
     val onDelete: (Feature) -> Unit,
     val onShowLayer: (FeatureLayer) -> Unit,
     val onRenameLayer: (FeatureLayer, String) -> Unit,
@@ -604,7 +650,23 @@ fun FeatureListSheet(
                 Row {
                     SmallIconButton(Icons.Filled.CenterFocusStrong, "Show ${f.name} on map") { actions.onShow(f) }
                     SmallIconButton(Icons.Filled.Edit, "Edit ${f.name}") { actions.onEdit(f) }
-                    SmallIconButton(Icons.Filled.Delete, "Delete ${f.name}") { deleting = "Delete \"${f.name}\"?" to { actions.onDelete(f) } }
+                    // The rest in a menu, as for layers, so the name keeps its room.
+                    Box {
+                        var menu by remember { mutableStateOf(false) }
+                        SmallIconButton(Icons.Filled.MoreVert, "More for ${f.name}") { menu = true }
+                        DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Download…") },
+                                leadingIcon = { Icon(Icons.Filled.Download, null) },
+                                onClick = { menu = false; actions.onDownload(f) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete") },
+                                leadingIcon = { Icon(Icons.Filled.Delete, null) },
+                                onClick = { menu = false; deleting = "Delete \"${f.name}\"?" to { actions.onDelete(f) } },
+                            )
+                        }
+                    }
                 }
             },
             modifier = Modifier
